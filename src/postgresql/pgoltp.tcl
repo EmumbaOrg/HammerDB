@@ -2937,52 +2937,6 @@ if {$myposition == 1} {
                 error "error, the database connection to $host could not be established"
             }
 
-            proc calc_recall {embeddings ground_truth k} {
-                set matched_embs 0
-                foreach emb $embeddings {
-                    if {[lsearch -exact $ground_truth $emb] != -1} {
-                        incr matched_embs
-                    }
-                }
-                set recall [expr {$matched_embs / double([llength $ground_truth])}]
-                return $recall
-            }
-
-            global vector_test_dataset vector_ground_truth
-            set k 10
-            set all_recalls {}
-
-            puts "CALCULATING RECALL"
-            for {set idx 0} {$idx < [expr [llength $vector_test_dataset] - 1]} {incr idx} {
-                set row [lindex $vector_test_dataset $idx]
-                set id [lindex $row 0]
-                set emb [lindex $row 1]
-
-                set result [pg_exec $lda1 "SELECT id FROM public.pg_vector_collection ORDER BY embedding <=> '\[$emb\]' LIMIT $k"]
-                if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
-                    if { $RAISEERROR } {
-                        error "[pg_result $result -error]"
-                    } else {
-                        puts "Vector query failed during recall calculation"
-                    }
-                    pg_result $result -clear
-                } else {
-                    set embeddings [pg_result $result -list]
-                    set row [lindex $vector_ground_truth $id]
-                    set n_id [lindex $row 0]
-                    set gt [lindex $row 1]
-                    
-                    set gt [lrange $gt 0 [expr $k-1]]
-                    set query_recall [calc_recall $embeddings $gt $k]
-                    lappend all_recalls $query_recall
-                    pg_result $result -clear
-                }
-            }
-            set recall [expr [expr {[tcl::mathop::+ {*}$all_recalls] / double([llength $all_recalls])}] * 100]
-            puts "Recall Score: $recall%"
-            tsv::set vector recall $recall
-            puts "RECALL CALCULATION COMPLETE"
-
             set ramptime 0
 	    puts [ CheckDBVersion $lda1 ]
             puts "Beginning rampup time of $rampup minutes"

@@ -361,7 +361,6 @@ global durmin
 set dursec [expr $durmin*60]
 set vector_qps 0
 set total_vqueries 0
-set recall [tsv::get vector recall]
 
 set vustoreport [ dict keys $monitortimings ]
 for { set vutri 0 } { $vutri < [llength $vustoreport] } { incr vutri } {
@@ -479,7 +478,6 @@ foreach sproc $sprocorder {
             puts -nonewline $fd [format "SD: %.3f\t" [dict get $sumtimings $sproc sd]]
             puts $fd [format "RATIO: %.3f%c" [dict get $sumtimings $sproc ratio] 37]
 	}
-        puts $fd [format "VECTOR RECALL: %.2f\n" $recall]
         set mediands [expr {$medianendms/1000}]
         set total_vqps [expr $total_vqueries / double($mediands)]
         puts $fd [format "TOTAL VECTOR QPS: %.2f\n" $total_vqps]

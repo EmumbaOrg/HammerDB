@@ -1,5 +1,6 @@
 import subprocess
 import os
+import time
 tmpdir = os.getenv('TMP', "/tmp")
 
 dbhost = "172.17.0.2"
@@ -28,7 +29,6 @@ diset('tpcc','pg_duration','2')
 diset('tpcc','pg_allwarehouse','false')
 diset('tpcc','pg_timeprofile','true')
 diset('tpcc','pg_vacuum','false')
-giset("commandline", "keepalive_margin", "90")
 
 print("STARTED LOADING VECTOR DATA IN DB AND BUILDING INDEX")
 result = subprocess.run(["vectordbbench", "pgvectorhnsw", "--config-file", "/home/emumba/emumba/VDB/VectorDBBench/vectordb_bench/config-files/sample_config.yml"], capture_output=True)
@@ -52,4 +52,20 @@ if result.returncode == 0:
     fd = open(file_path, "w")
     fd.write(jobid)
     fd.close()
+    time.sleep(10)
+
+    print("STARTING RECALL CALCULATION")
+    diset('tpcc','pg_driver','test')
+    customscript("recall_calculation.tcl")
+    vuset("vu", "1")
+    vucreate()
+    jobid = tclpy.eval('vurun')
+    vudestroy()
+    print("TEST COMPLETE")
+    # TODO: Fix - logs are not being written to file
+    file_path = os.path.join(tmpdir , "pg_tprocc" )
+    fd = open(file_path, "w")
+    fd.write(jobid)
+    fd.close()
+    print("RECALL CALUCLATION COMPLETE")
 exit()
