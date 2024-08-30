@@ -71,10 +71,15 @@ proc shared_tpcc_functions { tpccfunc db_async_scale } {
             .ed_mainFrame.mainwin.textFrame.left.text fastinsert $timepi(1)+1l $timept(1)
             set timepi(2) [.ed_mainFrame.mainwin.textFrame.left.text search -backwards "tsv::set application abort 1" end ]
             .ed_mainFrame.mainwin.textFrame.left.text fastinsert $timepi(2)+1l $timept(2)
-            set timepi(3) [.ed_mainFrame.mainwin.textFrame.left.text search -backwards "#END OF OLTP workload" end ]
+            set timepi(3) [.ed_mainFrame.mainwin.textFrame.left.text search -backwards "######END OLTP WORKLOAD######" end ]
             .ed_mainFrame.mainwin.textFrame.left.text fastinsert $timepi(3)+1l $timept(3)
-            set timepi(4) [.ed_mainFrame.mainwin.textFrame.left.text search -backwards "#END OF VECTOR workload" end ]
+            set timepi(4) [.ed_mainFrame.mainwin.textFrame.left.text search -backwards "######END VECTOR WORKLOAD######" end ]
             .ed_mainFrame.mainwin.textFrame.left.text fastinsert $timepi(4)+1l $timept(3)
+            set timepi(5) [.ed_mainFrame.mainwin.textFrame.left.text search -backwards "######START OLTP WORKLOAD######" end ]
+            .ed_mainFrame.mainwin.textFrame.left.text fastinsert $timepi(5)+1l $timept(1)
+            set timepi(6) [.ed_mainFrame.mainwin.textFrame.left.text search -backwards "######START VECTOR WORKLOAD######" end ]
+            .ed_mainFrame.mainwin.textFrame.left.text fastinsert $timepi(6)+1l $timept(1)
+            
         }
     }
 }

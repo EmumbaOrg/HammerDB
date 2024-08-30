@@ -2954,28 +2954,24 @@ if {$myposition == 1} {
 
             puts "CALCULATING RECALL"
             for {set idx 0} {$idx < [expr [llength $vector_test_dataset] - 1]} {incr idx} {
-                set data [lindex $vector_test_dataset $idx]
-                set row [split $data "|"]
-
+                set row [lindex $vector_test_dataset $idx]
                 set id [lindex $row 0]
                 set emb [lindex $row 1]
 
-                set result [pg_exec $lda1 "SELECT id FROM public.pg_vector_collection ORDER BY embedding <-> '\[$emb\]' LIMIT $k"]
+                set result [pg_exec $lda1 "SELECT id FROM public.pg_vector_collection ORDER BY embedding <=> '\[$emb\]' LIMIT $k"]
                 if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
                     if { $RAISEERROR } {
                         error "[pg_result $result -error]"
                     } else {
-                        error "[pg_result $result -error]"
                         puts "Vector query failed during recall calculation"
                     }
                     pg_result $result -clear
                 } else {
                     set embeddings [pg_result $result -list]
-                    set gt_data [lindex $vector_ground_truth $id]
-                    set row [split $gt_data "|"]
-
+                    set row [lindex $vector_ground_truth $id]
                     set n_id [lindex $row 0]
                     set gt [lindex $row 1]
+                    
                     set gt [lrange $gt 0 [expr $k-1]]
                     set query_recall [calc_recall $embeddings $gt $k]
                     lappend all_recalls $query_recall
@@ -3105,10 +3101,9 @@ if {$myposition == 1} {
             puts "Operating in Replica Mode, No Snapshots taken..."
         }
     } elseif {$myposition <= $workload1vu} {
-        #TIMESTAMP
         ######START OLTP WORKLOAD######
-        #TODO remove this hardcoded import and use gentpcc to insert this file
-        if [catch {package require xtprof} ] { error "Failed to load extended time profile functions" } else { namespace import xtprof::* }
+
+        #TIMESTAMP
         proc gettimestamp { } {
             set tstamp [ clock format [ clock seconds ] -format %Y%m%d%H%M%S ]
             return $tstamp
@@ -3352,72 +3347,45 @@ if {$myposition == 1} {
             }
         }
 
-        #END OF OLTP workload
+        ######END OLTP WORKLOAD######
         pg_disconnect $lda
     } else {
+        ######START VECTOR WORKLOAD######
+
         proc gettimestamp { } {
             set tstamp [ clock format [ clock seconds ] -format %Y%m%d%H%M%S ]
             return $tstamp
         }
 
-        proc semantic_search_base { lda k RAISEERROR ora_compatible pg_storedprocs } {
-            global vector_test_dataset 
-            #TODO consider passing the index 
-            upvar #1 vector_query_count vector_query_count
-            upvar #1 vector_data_idx vector_data_idx
-            set emb [ lindex $vector_test_dataset $vector_data_idx ]
-           
-            #TODO do this processing on data load
-            set row [split $emb "|"]
-            set id [lindex $row 0]
-            set emb [lindex $row 1]
-
+        proc semantic_search_base { lda emb k RAISEERROR ora_compatible pg_storedprocs } {
             if {[llength $emb] > 0} {
                 if { $ora_compatible eq "true" } {
-                    #TODO change hardcoded value from 10 to K
-                    set result [pg_exec $lda "exec semantic_search('\[$emb\]',10)" ]
+                    set result [pg_exec $lda "exec semantic_search('\[$emb\]', $k)" ]
                 } else {
                     if { $pg_storedprocs eq "true" } {
-                        #TODO change hardcoded value from 10 to K
-                        set result [pg_exec $lda "call semantic_search('\[$emb\]', 10, array\[0,0\])"]
+                        set result [pg_exec $lda "call semantic_search('\[$emb\]', $k, array\[0,0\])"]
                     } else {
-                        #TODO change hardcoded value from 10 to K
-                        set result [ pg_exec_prepared $lda knn {} {} "\[$emb\]" 10 ]
+                        set result [ pg_exec_prepared $lda knn {} {} "\[$emb\]" $k ]
                     }
                 }
                 if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
                     if { $RAISEERROR } {
                         error "[pg_result $result -error]"
                     } else {
-                        error "[pg_result $result -error]"
                         puts "Vector Level Procedure Error set RAISEERROR for Details"
                     }
-                    pg_result $result -clear
-                } else {
-                    pg_result $result -clear
-                    set vector_data_idx [expr $vector_data_idx + 1]
-                    set vector_query_count [expr $vector_query_count + 1]
-                    # TODO test if -1 works without expression and list is 0 indexed
-                    if { [llength $vector_test_dataset] -1 <= $vector_data_idx } {
-                        set vector_data_idx 0
-                    }
                 }
-                #TODO remove before final push. This is good for verification
-                puts "Total vector QPS: {$vector_query_count}"
-                puts "Vector data index: {$vector_data_idx}"
+                pg_result $result -clear
             }
         }
 
         proc fn_prep_statement { lda } {
             set prep_semantic_search "PREPARE knn(VECTOR, INT) AS SELECT id FROM public.pg_vector_collection ORDER BY embedding <=> \$1 LIMIT \$2;"
-            # TODO remove forloop
-            foreach prep_statement [ list $prep_semantic_search ] {
-                set result [ pg_exec $lda $prep_statement ]
-                if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
-                    error "[pg_result $result -error]"
-                } else {
-                    pg_result $result -clear
-                }
+            set result [ pg_exec $lda $prep_semantic_search ]
+            if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
+                error "[pg_result $result -error]"
+            } else {
+                pg_result $result -clear
             }
         }
         #RUN TPC-C
@@ -3439,8 +3407,14 @@ if {$myposition == 1} {
         
         # TODO set search parameters
         set result [pg_exec $lda "SET hnsw.ef_search=100"]
-        #TODO can add error handling here.
-        pg_result $result -clear
+        if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
+            if { $RAISEERROR } {
+                error "[pg_result $result -error]"
+            } else {
+                puts "Setting HNSW ef_search Query Error set RAISEERROR for Details"
+            }
+            pg_result $result -clear
+        }
 
         set result  [pg_exec $lda "SHOW max_parallel_workers"]
         set max_parallel_workers [pg_result $result -list]
@@ -3457,10 +3431,10 @@ if {$myposition == 1} {
         pg_result $result -clear
         puts "HNSW ef_search: $hnsw_efsearch"
 
-
+        global vector_test_dataset
         set vector_query_count 0
-        #TODO this can be change to 0?
-        set vector_data_idx 1
+        set vector_data_idx 0
+        set k 10
 
         #TODO good for debugging, can be removed 
         set counter 0
@@ -3482,20 +3456,29 @@ if {$myposition == 1} {
                 puts "Ramp up time is complete, moving on..."
                 break
             }
+            set row [ lindex $vector_test_dataset $vector_data_idx ] 
+            set emb [lindex $row 1]
+            
             if { $KEYANDTHINK } { keytime 2 }
-            semantic_search_base $lda 5 $RAISEERROR $ora_compatible $pg_storedprocs
+            semantic_search_base $lda $emb $k $RAISEERROR $ora_compatible $pg_storedprocs
             if { $KEYANDTHINK } { thinktime 5 }
             incr counter
+            incr vector_data_idx
+            incr vector_query_count
+            if { [expr [llength $vector_test_dataset] - 1 ] <= $vector_data_idx } {
+                set vector_data_idx 0
+            }
+            #TODO remove before final push. This is good for verification
+            puts "Total vector QPS: {$vector_query_count}"
+            puts "Vector data index: {$vector_data_idx}"
         }
         set end [clock seconds]
         puts "End time (rampup): $end"
         puts "End Counter $counter"
         puts "Duration [expr {$end - $start}]"
 
-        # TODO this can be moved to the top
-        if [catch {package require xtprof} ] { error "Failed to load extended time profile functions" } else { namespace import xtprof::* }
-        proc semantic_search { lda k RAISEERROR ora_compatible pg_storedprocs } {
-            semantic_search_base $lda $k $RAISEERROR $ora_compatible $pg_storedprocs
+        proc semantic_search { lda emb k RAISEERROR ora_compatible pg_storedprocs } {
+            semantic_search_base $lda $emb $k $RAISEERROR $ora_compatible $pg_storedprocs
         }
         puts "Processing $total_iterations vector transactions with output suppressed..."
         set start [clock seconds]
@@ -3511,19 +3494,31 @@ if {$myposition == 1} {
         puts "Start time: $start"
         for {set it $counter} {$it < $total_iterations} {incr it} {
             if { [expr {$it % $abchk}] eq 0 } { if { [ time {if {  [ tsv::get application abort ]  } { break }} ] > $hi_t }  {  set  abchk [ expr {min(($abchk * 2), $abchk_mx)}]; set hi_t [ expr {$hi_t * 2} ] } }
-            if { $KEYANDTHINK } { keytime 3 }
-            semantic_search $lda 5 $RAISEERROR $ora_compatible $pg_storedprocs
+            set row [ lindex $vector_test_dataset $vector_data_idx ] 
+            set emb [lindex $row 1]
+            
+            if { $KEYANDTHINK } { keytime 2 }
+            semantic_search $lda $emb $k $RAISEERROR $ora_compatible $pg_storedprocs
             if { $KEYANDTHINK } { thinktime 5 }
+            
             incr counter
+            incr vector_data_idx
+            incr vector_query_count
+            if { [expr [llength $vector_test_dataset] - 1 ] <= $vector_data_idx } {
+                set vector_data_idx 0
+            }
+            #TODO remove before final push. This is good for verification
+            puts "Total vector QPS: {$vector_query_count}"
+            puts "Vector data index: {$vector_data_idx}"
         }
         set end [clock seconds]
         puts "End time (final): $end"
         puts "End Counter $counter"
         puts "Duration [expr {$end - $start}]"
 
-        #END OF VECTOR workload
+        ######END VECTOR WORKLOAD######
         pg_disconnect $lda
-    }
+    } 
 }
         if { $pg_connect_pool } {
             insert_pgconnectpool_drivescript timed sync

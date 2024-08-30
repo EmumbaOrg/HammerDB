@@ -358,8 +358,7 @@ proc load_vector_data { path is_ground_truth } {
     if { $is_ground_truth } {
       set line [string map {"," " "} $line]
     }
-    lappend data "$id\|$line"
-    
+    lappend data [list $id $line]
   }
   return $data
 }
