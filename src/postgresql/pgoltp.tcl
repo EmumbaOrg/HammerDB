@@ -3109,7 +3109,7 @@ if {$myposition == 1} {
             return $tstamp
         }
         #NEW ORDER
-        proc neword { lda no_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
+        proc neword_base { lda no_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
             #2.4.1.2 select district id randomly from home warehouse where d_w_id = d_id
             set no_d_id [ RandomNumber 1 10 ]
             #2.4.1.2 Customer id randomly selected where c_d_id = d_id and c_w_id = w_id
@@ -3139,7 +3139,7 @@ if {$myposition == 1} {
             }
         }
         #PAYMENT
-        proc payment { lda p_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
+        proc payment_base { lda p_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
             #2.5.1.1 The home warehouse id remains the same for each terminal
             #2.5.1.1 select district id randomly from home warehouse where d_w_id = d_id
             set p_d_id [ RandomNumber 1 10 ]
@@ -3196,7 +3196,7 @@ if {$myposition == 1} {
             }
         }
         #ORDER_STATUS
-        proc ostat { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
+        proc ostat_base { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
             #2.5.1.1 select district id randomly from home warehouse where d_w_id = d_id
             set d_id [ RandomNumber 1 10 ]
             set nrnd [ NURand 255 0 999 123 ]
@@ -3231,7 +3231,7 @@ if {$myposition == 1} {
             }
         }
         #DELIVERY
-        proc delivery { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
+        proc delivery_base { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
             set carrier_id [ RandomNumber 1 10 ]
             set date [ gettimestamp ]
             if { $ora_compatible eq "true" } {
@@ -3255,7 +3255,7 @@ if {$myposition == 1} {
             }
         }
         #STOCK LEVEL
-        proc slev { lda w_id stock_level_d_id RAISEERROR ora_compatible pg_storedprocs } {
+        proc slev_base { lda w_id stock_level_d_id RAISEERROR ora_compatible pg_storedprocs } {
             set threshold [ RandomNumber 10 20 ]
             if { $ora_compatible eq "true" } {
                 set result [pg_exec $lda "exec slev($w_id,$stock_level_d_id,$threshold)" ]
@@ -3316,9 +3316,60 @@ if {$myposition == 1} {
             set d_id_input $d_id_input_arr(max)
         }
         set stock_level_d_id  [ RandomNumber 1 $d_id_input ]
-        set vector_query_count 0
-        set vector_data_idx 1
 
+        puts "Processing $total_iterations transactions with output suppressed..."
+        set abchk 1; set abchk_mx 1024; set hi_t [ expr {pow([ lindex [ time {if {  [ tsv::get application abort ]  } { break }} ] 0 ],2)}]
+        for {set it 0} {$it < $total_iterations} {incr it} {
+            if { [expr {$it % $abchk}] eq 0 } { if { [ time {if {  [ tsv::get application abort ]  } { break }} ] > $hi_t }  {  set  abchk [ expr {min(($abchk * 2), $abchk_mx)}]; set hi_t [ expr {$hi_t * 2} ] } }
+            if { [ tsv::get application ramp_done ] } {
+                puts "Ramp up time is complete, moving on..."
+                break
+            }
+            set choice [ RandomNumber 1 23 ]
+            if {$choice <= 10} {
+                if { $KEYANDTHINK } { keytime 18 }
+                neword_base $lda $w_id $w_id_input $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 12 }
+            } elseif {$choice <= 20} {
+                if { $KEYANDTHINK } { keytime 3 }
+                payment_base $lda $w_id $w_id_input $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 12 }
+            } elseif {$choice <= 21} {
+                if { $KEYANDTHINK } { keytime 2 }
+                delivery_base $lda $w_id $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 10 }
+            } elseif {$choice <= 22} {
+                if { $KEYANDTHINK } { keytime 2 }
+                slev_base $lda $w_id $stock_level_d_id $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 5 }
+            } elseif {$choice <= 23} {
+                if { $KEYANDTHINK } { keytime 2 }
+                ostat_base $lda $w_id $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 5 }
+            }
+        }
+
+        proc neword { lda no_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
+            neword_base $lda $no_w_id $w_id_input $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        proc payment { lda p_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
+            payment_base $lda $p_w_id $w_id_input $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        proc ostat { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
+            ostat_base $lda $w_id $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        proc delivery { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
+            delivery_base $lda $w_id $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        proc slev { lda w_id stock_level_d_id RAISEERROR ora_compatible pg_storedprocs } {
+            slev_base $lda $w_id $stock_level_d_id $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        puts "STARTING ACTUAL RUN"
         puts "Processing $total_iterations transactions with output suppressed..."
         set abchk 1; set abchk_mx 1024; set hi_t [ expr {pow([ lindex [ time {if {  [ tsv::get application abort ]  } { break }} ] 0 ],2)}]
         for {set it 0} {$it < $total_iterations} {incr it} {
