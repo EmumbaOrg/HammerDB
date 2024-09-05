@@ -11,6 +11,7 @@ dbport = 5432
 
 dbset('db','pg')
 dbset('bm','TPC-C')
+dbset( 'vindex', 'hnsw')
 
 diset('connection','pg_host', dbhost)
 diset('connection','pg_port', dbport)
@@ -25,10 +26,11 @@ diset('tpcc','pg_dbase', dbname )
 diset('tpcc','pg_driver','timed')
 diset('tpcc','pg_total_iterations','10000000')
 diset('tpcc','pg_rampup','1')
-diset('tpcc','pg_duration','2')
+diset('tpcc','pg_duration','1')
 diset('tpcc','pg_allwarehouse','false')
 diset('tpcc','pg_timeprofile','true')
 diset('tpcc','pg_vacuum','false')
+giset("commandline", "keepalive_margin", "90")
 
 print("STARTED LOADING VECTOR DATA IN DB AND BUILDING INDEX")
 result = subprocess.run(["vectordbbench", "pgvectorhnsw", "--config-file", "/home/emumba/emumba/VDB/VectorDBBench/vectordb_bench/config-files/sample_config.yml"], capture_output=True)

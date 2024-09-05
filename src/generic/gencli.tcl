@@ -725,15 +725,15 @@ proc librarycheck {} {
 }
 
 proc dbset { args } {
-    global rdbms bm opmode
+    global rdbms bm vindex opmode
     if {[ llength $args ] != 2} {
-        putscli {Usage: dbset [db|bm] value}
+        putscli {Usage: dbset [db|bm|vindex] value}
     } else {
         set option [ lindex [ split  $args ]  0 ]
-        set ind [ lsearch {db bm} $option ]
+        set ind [ lsearch {db bm vindex} $option ]
         if { $ind eq -1 } {
             putscli "Error: invalid option"
-            putscli {Usage: dbset [db|bm] value}
+            putscli {Usage: dbset [db|bm|vindex] value}
             return
         }
         set val [ lindex [ split  $args ]  1 ]
@@ -781,9 +781,19 @@ proc dbset { args } {
                         }
                     }
             }}
+            vindex {
+                set valid_values {hnsw ivf_flat streaming_diskann}
+                if {[lsearch -exact $valid_values $val] != -1} {
+                    set vindex $val
+                    SQLiteUpdateKeyValue "generic" "vectordb" "vindex" $vindex
+                    putscli "Vector index set to $vindex"
+                } else {
+                    putscli "Invalid vindex value $val. Valid values are: $valid_values"
+                }
+            }
             default {
                 putscli "Unknown dbset option"
-                putscli {Usage: dbset [db|bm|config] value}
+                putscli {Usage: dbset [db|bm|config|vindex] value}
             }
         }
     }

@@ -77,4 +77,7 @@
            <xt_gather_timeout>60</xt_gather_timeout>
            <xt_job_storage>0</xt_job_storage>
     </timeprofile>
+    <vectordb>
+        <vindex>hnsw</vindex>
+    </vectordb>
 </hammerdb>

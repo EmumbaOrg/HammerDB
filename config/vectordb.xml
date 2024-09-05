@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vectordb>
+    <ivf_flat>
+        <name>IVF_FLAT</name>
+        <description>Inverted File Flat Index</description>
+        <ivf_flat_k>10</ivf_flat_k>
+        <session_parameters>
+            <ss_probes>10</ss_probes>
+        </session_parameters>
+        <search_parameters>
+            <se_k>10</se_k>
+            <se_distance>cosine</se_distance>
+        </search_parameters>
+        <index_parameters>
+            <in_lists>100</in_lists>
+        </index_parameters>
+    </ivf_flat>
+    <hnsw>
+        <name>HNSW</name>
+        <description>Hierarchical Navigable Small World</description>
+        <session_parameters>
+            <ss_ef_search>100</ss_ef_search>
+            <ss_max_parallel_workers>4</ss_max_parallel_workers>
+            <ss_max_parallel_maintenance_workers>2</ss_max_parallel_maintenance_workers>
+            <ss_maintenance_work_mem>8GB</ss_maintenance_work_mem>
+        </session_parameters>
+        <search_parameters>
+            <se_k>10</se_k>
+            <se_distance>cosine</se_distance>
+        </search_parameters>
+        <index_parameters>
+            <in_ef_construction>200</in_ef_construction>
+            <in_m>16</in_m>
+        </index_parameters>
+    </hnsw>
+</vectordb>
