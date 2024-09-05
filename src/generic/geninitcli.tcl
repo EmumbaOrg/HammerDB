@@ -62,16 +62,6 @@ if { $dbdict eq "" } {
     Dict2SQLite "database" $dbdict
 }
 
-#Load database config from SQLite database.db
-set vectordbdict [ SQLite2Dict "vectordb" ]
-if { $vectordbdict eq "" } {
-    #Load database config from database.xml
-    set vectordbdict [ ::XML::To_Dict config/vectordb.xml ]
-
-    #Save XML content to SQLite - database.db
-    Dict2SQLite "vectordb" $vectordbdict
-}
-
 #Load database details in dict named configdbname
 foreach { key } [ dict keys $dbdict ] {
     set dictname config$key
@@ -83,6 +73,16 @@ foreach { key } [ dict keys $dbdict ] {
     set $dictname $dbconfdict
     set prefix [ dict get $dbdict $key prefix ]
     lappend dbsrclist "$key/$prefix\opt.tcl" "$key/$prefix\oltp.tcl" "$key/$prefix\olap.tcl" "$key/$prefix\otc.tcl"
+}
+
+#Load database config from SQLite vectordb.db
+set vectordbdict [ SQLite2Dict "vectordb" ]
+if { $vectordbdict eq "" } {
+    #Load database config from database.xml
+    set vectordbdict [ ::XML::To_Dict config/vectordb.xml ]
+
+    #Save XML content to SQLite - database.db
+    Dict2SQLite "vectordb" $vectordbdict
 }
 
 #get_xml_data

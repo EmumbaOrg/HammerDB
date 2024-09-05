@@ -601,6 +601,40 @@ proc findakey { key2find dictname } {
     return {}
 }
 
+proc dvset { args } {
+    global rdbms opmode
+    if {[ llength $args ] != 3} {
+        putscli "Error: Invalid number of arguments\nUsage: dvset dict key value"
+    } else {
+        set dct [ lindex $args 0 ]
+        set key [ lindex $args 1 ]
+        set val [ lindex $args 2 ]
+    
+        upvar #0 vectordbdict vectordbdict
+        if {[dict exists $vectordbdict $dct ]} {
+            set indexdict [dict create {*}[dict get $vectordbdict $dct]]
+            if {[dict exists $vectordbdict $dct $key]} {
+                set previous [ dict get $vectordbdict $dct $key ]
+                if { $previous eq [ concat $val ] } {
+                    putscli "Value $val for $dct:$key is the same as existing value $previous, no change made"
+                } else {
+                    if { [catch {dict set vectordbdict $dct $key [ concat $val ] } message]} {
+                        putscli "Failed to set Dictionary value: $message"
+                    } else {
+                        putscli "Changed $dct:$key from $previous to [ concat $val ] for $rdbms"
+                        #Save new value to SQLite
+                        SQLiteUpdateKeyValue "vectordb" $dct $key $val
+                        remote_command [ concat dvset $dct $key [ list \{$val\} ]]
+                }}
+            } else {
+                putscli "Dictionary for \"$dct\" exists but key \"$key\" doesn't"
+                putscli "Type \"print vdict\" for valid dictionaries and keys for $dct"
+            }
+        }
+
+    }
+}
+
 proc diset { args } {
     global rdbms opmode
     if {[ llength $args ] != 3} {
@@ -802,12 +836,12 @@ proc dbset { args } {
 proc print { args } {
     global _ED rdbms bm virtual_users conpause delayms ntimes suppo optlog unique_log_name no_log_buffer log_timestamps gen_count_ware gen_scale_fact gen_directory gen_num_vu
     if {[ llength $args ] != 1} {
-        puts {Usage: print [db|bm|dict|generic|script|vuconf|vucreated|vustatus|vucomplete|datagen|tcconf]}
+        puts {Usage: print [db|bm|dict|generic|script|vuconf|vucreated|vustatus|vucomplete|datagen|tcconf|vdict|vindex]}
     } else {
-        set ind [ lsearch {db bm dict generic script vuconf vucreated vustatus vucomplete datagen tcconf} $args ]
+        set ind [ lsearch {db bm dict generic script vuconf vucreated vustatus vucomplete datagen tcconf vdict vindex} $args ]
         if { $ind eq -1 } {
             puts "Error: invalid option"
-            puts {Usage: print [db|bm|dict|generic|script|vuconf|vucreated|vustatus|vucomplete|datagen|tcconf]}
+            puts {Usage: print [db|bm|dict|vdict|generic|script|vuconf|vucreated|vustatus|vucomplete|datagen|tcconf|vdict|vindex]}
             return
         }
         switch $args {
@@ -850,6 +884,11 @@ proc print { args } {
                         puts "Dictionary Settings for $rdbms"
                         pdict 2 $tmpdictforpt
                 }}
+            }
+            vdict {
+                global vindex
+                upvar #0 vectordbdict vectordbdict
+                pdict 2 [dict get $vectordbdict $vindex]
             }
             generic {
                 puts "Generic Dictionary Settings"
