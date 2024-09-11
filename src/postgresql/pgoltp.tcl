@@ -3411,7 +3411,7 @@ if {$myposition == 1} {
             }
         }
 
-        proc fn_prep_statement { lda } {
+        proc fn_prep_statement { lda } { ; # TODO: get distance param value value from config file.
             set prep_semantic_search "PREPARE knn(VECTOR, INT) AS SELECT id FROM public.pg_vector_collection ORDER BY embedding <=> \$1 LIMIT \$2;"
             set result [ pg_exec $lda $prep_semantic_search ]
             if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
@@ -3439,7 +3439,7 @@ if {$myposition == 1} {
             upvar #1 session_params session_params
             upvar #1 vindex vindex
             foreach {option val} $session_params {
-                set result [pg_exec $lda "SET $vindex.$option='$val'"]
+                set result [pg_exec $lda "SET $option='$val'"]
                 if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
                     puts "Error setting HNSW $option parameter: [pg_result $result -error]"
                 }

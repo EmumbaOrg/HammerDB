@@ -5,7 +5,7 @@
         <description>Inverted File Flat Index</description>
         <ivf_flat_k>10</ivf_flat_k>
         <session_parameters>
-            <ss_probes>10</ss_probes>
+            <ss_ivfflat.probes>10</ss_ivfflat.probes>
         </session_parameters>
         <search_parameters>
             <se_k>10</se_k>
@@ -19,7 +19,7 @@
         <name>HNSW</name>
         <description>Hierarchical Navigable Small World</description>
         <session_parameters>
-            <ss_ef_search>100</ss_ef_search>
+            <ss_hnsw.ef_search>100</ss_hnsw.ef_search>
             <ss_max_parallel_workers>4</ss_max_parallel_workers>
             <ss_max_parallel_maintenance_workers>2</ss_max_parallel_maintenance_workers>
             <ss_maintenance_work_mem>8GB</ss_maintenance_work_mem>
