@@ -94,6 +94,35 @@ tsv::unset allclicktimings
         }
     }
 
+proc findresultsdir {} {
+global env
+        set result "."       ;
+        if {[string match windows $::tcl_platform(platform)]} {
+            if {[info exists env(RESULTS_LOCAL_DIR)] && [file isdirectory $env(RESULTS_LOCAL_DIR)] \
+                    && [file writable $env(RESULTS_LOCAL_DIR)]} {
+                return $env(RESULTS_LOCAL_DIR)
+            }
+            if {[file isdirectory C:/TEMP] && [file writable C:/TEMP]} {
+                return C:/TEMP
+            }
+            if {[file isdirectory C:/] && [file writable C:/]} {
+                return C:/
+            }
+        } else { ;
+            if {[info exists env(RESULTS_LOCAL_DIR)] && [file isdirectory $env(RESULTS_LOCAL_DIR)] \
+                    && [file writable $env(RESULTS_LOCAL_DIR)]} {
+                return $env(RESULTS_LOCAL_DIR)
+            }
+            if {[file isdirectory env()] && [file writable /tmp]} {
+                return /tmp
+            }
+        }
+        if {[file writable .]} {
+            return .
+        }
+	return notmpdir
+    }
+
 proc findtempdir {} {
 global env
         set result "."       ;
@@ -319,7 +348,7 @@ set lev2uniquekeys [ lsort -unique [concat {*}[lmap k1 [dict keys $monitortiming
 if { ![ string equal "delivery neword ostat payment semantic_search slev" $lev2uniquekeys ]} { 
 puts "WARNING:Timing data returned values for functions different than expected delivery neword ostat payment slev semantic_search: $lev2uniquekeys"
 }
-set tmpdir [ findtempdir ]
+set tmpdir [ findresultsdir ]
 if { $tmpdir != "notmpdir" } {
         if { $xtunique_log_name eq 1 } {
         set guidid [ guid ]
