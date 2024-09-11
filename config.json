@@ -1,0 +1,43 @@
+{
+  "database": {
+    "host": "172.17.0.2",
+    "username": "postgres",
+    "password": "admin123",
+    "db_name": "ann",
+    "instance_type": "db.m6i.large",
+    "provider": "aws",
+    "enable_seqscan": "on"
+  },
+  "hammerdb": {
+    "db": "pg",
+    "bm": "TPC-C",
+    "vindex": "hnsw",
+    "pg_driver": "timed",
+    "pg_total_iterations": "10000000",
+    "pg_rampup": "0",
+    "pg_duration": "1",
+    "pg_allwarehouse": "false",
+    "pg_timeprofile": "true",
+    "pg_vacuum": "false",
+    "keepalive_margin": "90"
+  },
+  "cases": [
+    {
+      "db-label": "run1-seqon",  
+      "drop_old": true,
+      "load": true,
+      "search-serial": false,
+      "search-concurrent": false,
+      "case-type": "Performance1536D50K",
+      "maintenance-work-mem": "4GB",
+      "max-parallel-workers": 2,
+      "ef-search": [10, 20, 40, 80, 120, 200, 400],
+      "ef-construction": 32,
+      "m": 8,
+      "num-concurrency": ["1", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100"],
+      "concurrency-duration": 30,
+      "k": 10,
+      "run_count": 1
+    }
+  ]
+}
