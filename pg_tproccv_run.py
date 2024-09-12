@@ -129,6 +129,14 @@ def configure_hammerdb(db_config: dict, hammerdb_config: dict):
     diset('tpcc','pg_vacuum', hammerdb_config['pg_vacuum'])
     giset("commandline", "keepalive_margin", hammerdb_config['keepalive_margin'])
 
+def configure_vectordb(ef_search: str, index: str, case: dict):
+    dvset(index, "ss_hnsw.ef_search", ef_search)
+    dvset(index, "se_k", case["k"])
+    dvset(index, "se_distance", "cosine")
+    dvset(index, "in_max_parallel_workers", case["max-parallel-workers"])
+    dvset(index, "in_maintenance_work_mem", case["maintenance-work-mem"])
+    dvset(index, "ino_ef_construction", case["ef-construction"])
+    dvset(index, "ino_m", case["m"])
 
 def drop_tpcc_schema(db_config: dict):
     conn = psycopg2.connect(
@@ -227,6 +235,7 @@ def run_benchmark(case, db_config, hammerdb_config):
         print(f"Starting run {run + 1} of {run_count} for case: {case['db-label']}")
         for i, ef_search in enumerate(case["ef-search"]):
             configure_hammerdb(db_config, hammerdb_config)
+            configure_vectordb(ef_search, hammerdb_config["vindex"], case)
             command = base_command + ["--ef-search", str(ef_search)]
             if i > 0:
                 # Remove conflicting --drop-old and --load flags

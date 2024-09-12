@@ -85,6 +85,9 @@ if { $vectordbdict eq "" } {
     Dict2SQLite "vectordb" $vectordbdict
 }
 
+global vindex
+set vindex [dict get $genericdict vectordb vindex]
+
 #get_xml_data
 set_global_config $genericdict
 
