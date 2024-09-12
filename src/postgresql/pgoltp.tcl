@@ -2863,6 +2863,7 @@ proc loadtimedpgtpcc { } {
         set index_params [dict create]
         set search_params [dict create]
         set session_params [dict create]
+        set index_creation_with_options [dict create]
 
         foreach {key value} [dict get $vectordbdict $vindex] {
             if {[string match "in_*" $key]} {
@@ -2874,6 +2875,9 @@ proc loadtimedpgtpcc { } {
             } elseif {[string match "ss_*" $key]} {
                 set param_key [string range $key 3 end]
                 dict set session_params $param_key $value
+            } elseif {[string match "ino_*" $key]} {
+                set param_key [string range $key 4 end]
+                dict set index_creation_with_options $param_key $value
             }
         }
     } else {
@@ -2894,6 +2898,7 @@ set vindex $vindex ;# PostgreSQL Vector Index Alogrithm
 set search_params {$search_params} ;# Vector DB Dictionary
 set session_params {$session_params} ;# Vector DB Dictionary
 set index_params {$index_params} ;# Vector DB Dictionary
+set index_creation_with_options {$index_creation_with_options} ;# Vector DB Dictionary
 set total_iterations $pg_total_iterations ;# Number of transactions before logging off
 set RAISEERROR \"$pg_raiseerror\" ;# Exit script on PostgreSQL (true or false)
 set KEYANDTHINK \"$pg_keyandthink\" ;# Time for user thinking and keying (true or false)
@@ -3411,8 +3416,8 @@ if {$myposition == 1} {
             }
         }
 
-        proc fn_prep_statement { lda } { ; # TODO: get distance param value value from config file.
-            set prep_semantic_search "PREPARE knn(VECTOR, INT) AS SELECT id FROM public.pg_vector_collection ORDER BY embedding <=> \$1 LIMIT \$2;"
+        proc fn_prep_statement { lda dist_op } { ; # TODO: get distance param value value from config file.
+            set prep_semantic_search "PREPARE knn(VECTOR, INT) AS SELECT id FROM public.pg_vector_collection ORDER BY embedding $dist_op \$1 LIMIT \$2;"
             set result [ pg_exec $lda $prep_semantic_search ]
             if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
                 error "[pg_result $result -error]"
@@ -3420,7 +3425,23 @@ if {$myposition == 1} {
                 pg_result $result -clear
             }
         }
+
+        proc get_distance_op { dist_op } {
+            set operator <=>
+            if { $dist_op eq "cosine" } {
+                set operator <=>
+            } elseif { $dist_op eq "euclidean" } {
+                set operator <->
+            } elseif { $dist_op eq "neg_inner_product" } {
+                set operator <#>
+            } elseif { $dist_op eq "taxicab" } {
+                set operator <+>
+            }
+            return $operator
+        }
+
         #RUN TPC-C
+        set dist_op [ get_distance_op [dict get $search_params distance ] ]
         set lda [ ConnectToPostgres $host $port $sslmode $user $password $db ]
         if { $lda eq "Failed" } {
             error "error, the database connection to $host could not be established"
@@ -3431,11 +3452,11 @@ if {$myposition == 1} {
             } elseif { $pg_storedprocs eq "true" } {
                 ;
             } else {
-                fn_prep_statement $lda
+                fn_prep_statement $lda $dist_op
             }
         }
 
-        proc update_session_params { lda } {
+        proc set_session_params { lda } {
             upvar #1 session_params session_params
             upvar #1 vindex vindex
             foreach {option val} $session_params {
@@ -3446,13 +3467,22 @@ if {$myposition == 1} {
                 pg_result $result -clear
             }
         }
-        update_session_params $lda
+        proc set_index_params { lda } {
+            upvar #1 index_params index_params
+            foreach {option val} $index_params {
+                set result [pg_exec $lda "SET $option='$val'"]
+                if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
+                    puts "Error setting HNSW $option parameter: [pg_result $result -error]"
+                }
+                pg_result $result -clear
+            }
+        }
+        set_session_params $lda
 
         global vector_test_dataset
         set vector_query_count 0
         set vector_data_idx 0
         set k [dict get $search_params k ]
-        set distance_metric [dict get $search_params distance ]
         #TODO good for debugging, can be removed 
         set counter 0
 
@@ -3477,7 +3507,7 @@ if {$myposition == 1} {
             set emb [lindex $row 1]
             
             if { $KEYANDTHINK } { keytime 2 }
-            semantic_search_base $lda $emb $k $RAISEERROR $ora_compatible $pg_storedprocs
+            semantic_search_base $lda $emb $k $dist_op $RAISEERROR $ora_compatible $pg_storedprocs
             if { $KEYANDTHINK } { thinktime 5 }
             incr counter
             incr vector_data_idx
@@ -3494,8 +3524,8 @@ if {$myposition == 1} {
         puts "End Counter $counter"
         puts "Duration [expr {$end - $start}]"
 
-        proc semantic_search { lda emb k RAISEERROR ora_compatible pg_storedprocs } {
-            semantic_search_base $lda $emb $k $RAISEERROR $ora_compatible $pg_storedprocs
+        proc semantic_search { lda emb k dist_op RAISEERROR ora_compatible pg_storedprocs } {
+            semantic_search_base $lda $emb $k $dist_op $RAISEERROR $ora_compatible $pg_storedprocs
         }
         puts "Processing $total_iterations vector transactions with output suppressed..."
         set start [clock seconds]
@@ -3515,7 +3545,7 @@ if {$myposition == 1} {
             set emb [lindex $row 1]
             
             if { $KEYANDTHINK } { keytime 2 }
-            semantic_search $lda $emb $k $RAISEERROR $ora_compatible $pg_storedprocs
+            semantic_search $lda $emb $k $dist_op $RAISEERROR $ora_compatible $pg_storedprocs
             if { $KEYANDTHINK } { thinktime 5 }
             
             incr counter
