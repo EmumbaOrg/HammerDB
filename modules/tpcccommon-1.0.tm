@@ -364,5 +364,5 @@ proc load_vector_data { path is_ground_truth } {
 }
 
 global vector_test_dataset vector_ground_truth
-set vector_test_dataset [ load_vector_data "/home/emumba/emumba/hammerdb-dev/HammerDB-4.11/output.csv" "false" ]
-set vector_ground_truth [ load_vector_data "/home/emumba/emumba/hammerdb-dev/HammerDB-4.11/output_gt.csv" "true" ]
+set vector_test_dataset [ load_vector_data "./dataset/vector/test/output.csv" "false" ]
+set vector_ground_truth [ load_vector_data "./dataset/vector/ground_truth/output_gt.csv" "true" ]
