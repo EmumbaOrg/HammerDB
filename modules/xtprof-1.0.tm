@@ -491,7 +491,8 @@ foreach sproc $sprocorder {
 #Insert summary timings into JOBTIMING table, summary identified by summary column eq 1
 hdb eval [ subst {INSERT INTO JOBTIMING(jobid,vu,procname,calls,min_ms,avg_ms,max_ms,total_ms,p99_ms,p95_ms,p50_ms,sd,ratio_pct,summary,elapsed_ms) VALUES('$jobid',[llength $vustoreport],'[format "%s" [ string toupper $sproc]]',[format "%d" [dict get $sumtimings $sproc calls]],[format "%.3f" [dict get $sumtimings $sproc min]],[format "%.3f" [dict get $sumtimings $sproc avgms]],[format "%.3f" [dict get $sumtimings $sproc max]],[format "%.3f" [dict get $sumtimings $sproc totalms]],[format "%.3f" [dict get $sumtimings $sproc p99]],[format "%.3f" [dict get $sumtimings $sproc p95]],[format "%.3f" [dict get $sumtimings $sproc p50]],[format "%.3f" [dict get $sumtimings $sproc sd]],[format "%.3f" [dict get $sumtimings $sproc ratio] 37],1,$medianendms)} ]
 		}
-	} 
+	}
+        global nopm tpm
         puts $fd "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+"
      puts $fd [format ">>>>> SUMMARY OF [llength $vustoreport] ACTIVE VIRTUAL USERS : MEDIAN ELAPSED TIME : %.0fms" $medianendms]
 foreach sproc $sprocorder {
@@ -509,7 +510,9 @@ foreach sproc $sprocorder {
 	}
         set mediands [expr {$medianendms/1000}]
         set total_vqps [expr $total_vqueries / double($mediands)]
-        puts $fd [format "TOTAL VECTOR QPS: %.2f\n" $total_vqps]
+        puts $fd [format "TOTAL VECTOR QPS: %.2f" $total_vqps]
+        puts $fd [format "NOPM: %d" $nopm]
+        puts $fd [format "TPM: %d" $tpm]
         puts $fd "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+"
 close $fd
 }
