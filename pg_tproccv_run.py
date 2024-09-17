@@ -122,6 +122,8 @@ def configure_hammerdb(db_config: dict, hammerdb_config: dict):
     diset('tpcc','pg_dbase', db_config['db_name'])
     diset('tpcc','pg_driver',hammerdb_config['pg_driver'])
     diset('tpcc','pg_total_iterations', hammerdb_config['pg_total_iterations'])
+    diset('tpcc','pg_count_ware', hammerdb_config['pg_count_ware'])
+    diset('tpcc','pg_num_vu', hammerdb_config['pg_num_vu'])
     diset('tpcc','pg_rampup', hammerdb_config['pg_rampup'])
     diset('tpcc','pg_duration', hammerdb_config['pg_duration'])
     diset('tpcc','pg_allwarehouse', hammerdb_config['pg_allwarehouse'])
@@ -228,7 +230,7 @@ def run_benchmark(case, db_config, hammerdb_config):
         "--num-concurrency", ",".join(case["num-concurrency"]),
         "--concurrency-duration", str(case["concurrency-duration"])
     ])
-
+    build_schema = hammerdb_config.get("build_schema", True)
 
     run_count = case.get("run_count", 1)
     for run in range(run_count):
@@ -237,7 +239,7 @@ def run_benchmark(case, db_config, hammerdb_config):
             configure_hammerdb(db_config, hammerdb_config)
             configure_vectordb(ef_search, hammerdb_config["vindex"], case)
             command = base_command + ["--ef-search", str(ef_search)]
-            if i > 0:
+            if i > 0 or run > 0:
                 # Remove conflicting --drop-old and --load flags
                 command = [arg for arg in command if arg not in ["--drop-old", "--load"]]
                 # Add skip flags if they are not already in the command
@@ -245,6 +247,7 @@ def run_benchmark(case, db_config, hammerdb_config):
                     command.append("--skip-drop-old")
                 if "--skip-load" not in command:
                     command.append("--skip-load")
+                build_schema = False # Don't HammerDB build schema if it's not the first run
             try:
                 random_number = random.randint(1, 100000)
                 print(f"Running command: {' '.join(command)}")
@@ -279,7 +282,7 @@ def run_benchmark(case, db_config, hammerdb_config):
                     f.flush()
                     
                     print("*************STARTING HAMMERDB SEARCH*************")
-                    if i == 0 or run == 0:
+                    if (i == 0 or run == 0) and build_schema:
                         drop_tpcc_schema(db_config)
                         buildschema()
                         vudestroy()
