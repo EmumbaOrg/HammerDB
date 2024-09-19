@@ -221,7 +221,7 @@ def run_benchmark(case: dict, db_config: dict, hammerdb_config: dict):
         "--case-type", case["case-type"],
         "--maintenance-work-mem", case["maintenance-work-mem"],
         "--max-parallel-workers", str(case["max-parallel-workers"]),
-        "--l_value_ib", str(case["l_value_ib"]),
+        "--l-value-ib", str(case["l_value_ib"]),
         "--max-neighbors", str(case["max-neighbors"]),
         "--k", str(case["k"]),
         "--concurrency-duration", str(case["concurrency-duration"])
@@ -233,7 +233,7 @@ def run_benchmark(case: dict, db_config: dict, hammerdb_config: dict):
     for run in range(run_count):
         print(f"Starting run {run + 1} of {run_count} for case: {case['db-label']}")
         for i, l_value_is in enumerate(case["l_value_is"]):
-            command = base_command + ["--l_value_is", str(l_value_is)]
+            command = base_command + ["--l-value-is", str(l_value_is)]
 
             if i > 0 or run > 0:
                 # Remove conflicting --drop-old and --load flags
@@ -298,7 +298,7 @@ def run_benchmark(case: dict, db_config: dict, hammerdb_config: dict):
             time.sleep(60)
 
 def main():
-    config = load_config("config-large-diskann.json")
+    config = load_config("config.json")
     start_time = time.time()
     for case in config['cases']:
         print(f"Running case: {case['db-label']}")
