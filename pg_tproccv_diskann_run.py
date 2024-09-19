@@ -133,14 +133,14 @@ def configure_hammerdb(db_config: dict, hammerdb_config: dict):
     diset('tpcc','pg_vacuum', hammerdb_config['pg_vacuum'])
     giset("commandline", "keepalive_margin", hammerdb_config['keepalive_margin'])
 
-def configure_vectordb(ef_search: str, index: str, case: dict):
-    dvset(index, "ss_hnsw.ef_search", ef_search)
+def configure_vectordb(l_value_is: str, index: str, case: dict):
+    dvset(index, "ss_diskann.l_value_is", l_value_is)
     dvset(index, "se_k", case["k"])
     dvset(index, "se_distance", "cosine")
     dvset(index, "in_max_parallel_workers", case["max-parallel-workers"])
     dvset(index, "in_maintenance_work_mem", case["maintenance-work-mem"])
-    dvset(index, "ino_ef_construction", case["ef-construction"])
-    dvset(index, "ino_m", case["m"])
+    dvset(index, "ino_max_neighbors", case["max-neighbors"])
+    dvset(index, "ino_l_value_ib", case["l_value_ib"])
 
 def drop_tpcc_schema(db_config: dict):
     conn = psycopg2.connect(
@@ -233,6 +233,8 @@ def run_benchmark(case: dict, db_config: dict, hammerdb_config: dict):
     for run in range(run_count):
         print(f"Starting run {run + 1} of {run_count} for case: {case['db-label']}")
         for i, l_value_is in enumerate(case["l_value_is"]):
+            configure_hammerdb(db_config, hammerdb_config)
+            configure_vectordb(l_value_is, hammerdb_config["vindex"], case)
             command = base_command + ["--l-value-is", str(l_value_is)]
 
             if i > 0 or run > 0:
