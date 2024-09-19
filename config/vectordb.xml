@@ -37,4 +37,23 @@
             <ino_m>16</ino_m>
         </index_creation_with_options>
     </hnsw>
+    <pgdiskann>
+        <name>PGDiskAnn</name>
+        <desc>DiskAnn</desc>
+        <session_params>
+            <ss_diskann.l_value_is>100</ss_diskann.l_value_is>
+        </session_params>
+        <search_params>
+            <se_k>10</se_k>
+            <se_distance>cosine</se_distance>
+        </search_params>
+        <index_params>
+            <in_max_parallel_workers>4</in_max_parallel_workers>
+            <in_maintenance_work_mem>8GB</in_maintenance_work_mem>
+        </index_params>
+        <index_creation_with_options>
+            <ino_max_neighbors>128</ino_max_neighbors>
+            <ino_l_value_ib>16</ino_l_value_ib>
+        </index_creation_with_options>
+    </pgdiskann>
 </vectordb>
