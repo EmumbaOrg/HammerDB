@@ -214,7 +214,7 @@ def run_benchmark(case: dict, db_config: dict, hammerdb_config: dict):
         base_command.append("--skip-load")
 
     # Only build index from VDB
-    base_command.append("--search-concurrent")
+    base_command.append("--skip-search-serial")
     base_command.append("--skip-search-concurrent")
 
     base_command.extend([
