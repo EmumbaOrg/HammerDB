@@ -56,4 +56,7 @@
             <ino_l_value_ib>16</ino_l_value_ib>
         </index_creation_with_options>
     </pgdiskann>
+    <mixed_workload>
+        <mw_oltp_vector_vu_ratio>0.8</mw_oltp_vector_vu_ratio>
+    </mixed_workload>
 </vectordb>

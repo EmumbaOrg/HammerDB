@@ -141,6 +141,7 @@ def configure_vectordb(l_value_is: str, index: str, case: dict):
     dvset(index, "in_maintenance_work_mem", case["maintenance-work-mem"])
     dvset(index, "ino_max_neighbors", case["max-neighbors"])
     dvset(index, "ino_l_value_ib", case["l_value_ib"])
+    dvset("mixed_workload", case["mw_oltp_vector_vu_ratio"], "0.5")
 
 def drop_tpcc_schema(db_config: dict):
     conn = psycopg2.connect(

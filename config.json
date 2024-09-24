@@ -40,6 +40,7 @@
       "num-concurrency": ["1", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100"],
       "concurrency-duration": 30,
       "k": 10,
+      "mw_oltp_vector_vu_ratio": "0.8",
       "run_count": 1
     }
   ]

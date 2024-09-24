@@ -2883,6 +2883,7 @@ proc loadtimedpgtpcc { } {
     } else {
         error "Index configuration for $vindex not found in vectordbdict"
     }
+    set mw_vu_ratio [dict get $vectordbdict mixed_workload mw_oltp_vector_vu_ratio]
 
     #set variables to values in dict
     setlocaltpccvars $configpostgresql
@@ -2899,6 +2900,7 @@ set search_params {$search_params} ;# Vector DB Dictionary
 set session_params {$session_params} ;# Vector DB Dictionary
 set index_params {$index_params} ;# Vector DB Dictionary
 set index_creation_with_options {$index_creation_with_options} ;# Vector DB Dictionary
+set mw_vu_ratio $mw_vu_ratio ;# Mixed Workload VUs Ratio
 set total_iterations $pg_total_iterations ;# Number of transactions before logging off
 set RAISEERROR \"$pg_raiseerror\" ;# Exit script on PostgreSQL (true or false)
 set KEYANDTHINK \"$pg_keyandthink\" ;# Time for user thinking and keying (true or false)
@@ -2954,7 +2956,8 @@ proc CheckDBVersion { lda1 } {
         }
 
 set rema [ lassign [ findvuposition ] myposition totalvirtualusers ]
-set workload1vu [expr ceil([expr 0.8 * [expr $totalvirtualusers - 1]])]
+set workload1vu [expr [expr ceil([expr $mw_vu_ratio * [expr $totalvirtualusers - 1]])] + 1]
+
 if {$myposition == 1} {
         ######MONITOR THREAD######
         if { $mode eq "Local" || $mode eq "Primary" } {

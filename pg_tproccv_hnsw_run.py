@@ -139,6 +139,7 @@ def configure_vectordb(ef_search: str, index: str, case: dict):
     dvset(index, "in_maintenance_work_mem", case["maintenance-work-mem"])
     dvset(index, "ino_ef_construction", case["ef-construction"])
     dvset(index, "ino_m", case["m"])
+    dvset("mixed_workload", case["mw_oltp_vector_vu_ratio"], "0.5")
 
 def drop_tpcc_schema(db_config: dict):
     conn = psycopg2.connect(
