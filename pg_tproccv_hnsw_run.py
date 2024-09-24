@@ -130,6 +130,7 @@ def configure_hammerdb(db_config: dict, hammerdb_config: dict):
     diset('tpcc','pg_timeprofile', hammerdb_config['pg_timeprofile'])
     diset('tpcc','pg_vacuum', hammerdb_config['pg_vacuum'])
     giset("commandline", "keepalive_margin", hammerdb_config['keepalive_margin'])
+    dvset("mixed_workload", "vector_table_name", hammerdb_config["vector_table_name"])
 
 def configure_vectordb(ef_search: str, index: str, case: dict):
     dvset(index, "ss_hnsw.ef_search", ef_search)
@@ -139,7 +140,7 @@ def configure_vectordb(ef_search: str, index: str, case: dict):
     dvset(index, "in_maintenance_work_mem", case["maintenance-work-mem"])
     dvset(index, "ino_ef_construction", case["ef-construction"])
     dvset(index, "ino_m", case["m"])
-    dvset("mixed_workload", case["mw_oltp_vector_vu_ratio"], "0.5")
+    dvset("mixed_workload", "mw_oltp_vector_vu_ratio", case["mw_oltp_vector_vu_ratio"])
 
 def drop_tpcc_schema(db_config: dict):
     conn = psycopg2.connect(
@@ -286,6 +287,7 @@ def run_benchmark(case, db_config, hammerdb_config):
                     for vu in case["num-concurrency"]:
                         print(f"Running HammerDB TPC-CV with {vu} VUs")
                         run_tpccv(vu, output_dir)
+                        print("Sleeping for 30 seconds")
                         time.sleep(30)
                     
                     print("*************CALCULATING RECALL*************")

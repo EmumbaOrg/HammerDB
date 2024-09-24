@@ -2884,6 +2884,7 @@ proc loadtimedpgtpcc { } {
         error "Index configuration for $vindex not found in vectordbdict"
     }
     set mw_vu_ratio [dict get $vectordbdict mixed_workload mw_oltp_vector_vu_ratio]
+    set vector_table_name [dict get $vectordbdict mixed_workload vector_table_name]
 
     #set variables to values in dict
     setlocaltpccvars $configpostgresql
@@ -2901,6 +2902,7 @@ set session_params {$session_params} ;# Vector DB Dictionary
 set index_params {$index_params} ;# Vector DB Dictionary
 set index_creation_with_options {$index_creation_with_options} ;# Vector DB Dictionary
 set mw_vu_ratio $mw_vu_ratio ;# Mixed Workload VUs Ratio
+set vector_table_name $vector_table_name ;# Vector table name used in VDBBench
 set total_iterations $pg_total_iterations ;# Number of transactions before logging off
 set RAISEERROR \"$pg_raiseerror\" ;# Exit script on PostgreSQL (true or false)
 set KEYANDTHINK \"$pg_keyandthink\" ;# Time for user thinking and keying (true or false)
@@ -3420,8 +3422,9 @@ if {$myposition == 1} {
             }
         }
 
-        proc fn_prep_statement { lda dist_op } { ; # TODO: get distance param value value from config file.
-            set prep_semantic_search "PREPARE knn(VECTOR, INT) AS SELECT id FROM public.pg_vector_collection ORDER BY embedding $dist_op \$1 LIMIT \$2;"
+        proc fn_prep_statement { lda dist_op } {
+            upvar #1 vector_table_name vector_table_name
+            set prep_semantic_search "PREPARE knn(VECTOR, INT) AS SELECT id FROM $vector_table_name ORDER BY embedding $dist_op \$1 LIMIT \$2;"
             set result [ pg_exec $lda $prep_semantic_search ]
             if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
                 error "[pg_result $result -error]"

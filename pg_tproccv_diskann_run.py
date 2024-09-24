@@ -132,6 +132,8 @@ def configure_hammerdb(db_config: dict, hammerdb_config: dict):
     diset('tpcc','pg_timeprofile', hammerdb_config['pg_timeprofile'])
     diset('tpcc','pg_vacuum', hammerdb_config['pg_vacuum'])
     giset("commandline", "keepalive_margin", hammerdb_config['keepalive_margin'])
+    dvset("mixed_workload", "vector_table_name", hammerdb_config["vector_table_name"])
+
 
 def configure_vectordb(l_value_is: str, index: str, case: dict):
     dvset(index, "ss_diskann.l_value_is", l_value_is)
@@ -141,7 +143,7 @@ def configure_vectordb(l_value_is: str, index: str, case: dict):
     dvset(index, "in_maintenance_work_mem", case["maintenance-work-mem"])
     dvset(index, "ino_max_neighbors", case["max-neighbors"])
     dvset(index, "ino_l_value_ib", case["l_value_ib"])
-    dvset("mixed_workload", case["mw_oltp_vector_vu_ratio"], "0.5")
+    dvset("mixed_workload", "mw_oltp_vector_vu_ratio", case["mw_oltp_vector_vu_ratio"])
 
 def drop_tpcc_schema(db_config: dict):
     conn = psycopg2.connect(

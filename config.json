@@ -12,6 +12,7 @@
     "db": "pg",
     "bm": "TPC-C",
     "vindex": "hnsw",
+    "vector_table_name": "public.pg_vector_collection",
     "build_schema": true,
     "pg_driver": "timed",
     "pg_total_iterations": "10000000",
