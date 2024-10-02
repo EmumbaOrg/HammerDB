@@ -3402,15 +3402,8 @@ if {$myposition == 1} {
 
         proc semantic_search_base { lda emb k RAISEERROR ora_compatible pg_storedprocs } {
             if {[llength $emb] > 0} {
-                if { $ora_compatible eq "true" } {
-                    set result [pg_exec $lda "exec semantic_search('\[$emb\]', $k)" ]
-                } else {
-                    if { $pg_storedprocs eq "true" } {
-                        set result [pg_exec $lda "call semantic_search('\[$emb\]', $k, array\[0,0\])"]
-                    } else {
-                        set result [ pg_exec_prepared $lda knn {} {} "\[$emb\]" $k ]
-                    }
-                }
+                # We won't be using stored procedures for vector search
+                set result [ pg_exec_prepared $lda knn {} {} "\[$emb\]" $k ]
                 if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
                     if { $RAISEERROR } {
                         error "[pg_result $result -error]"
