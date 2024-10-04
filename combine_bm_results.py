@@ -12,24 +12,29 @@ args = parser.parse_args()
 def extract_from_hdbxtprofile(file_path):
     with open(file_path, "r") as file:
         content = file.read()
+    summaries = re.findall(
+        r'>>>>> SUMMARY OF ([\d.]+) ACTIVE VIRTUAL USERS.*?AVG:\s*([\d.]+)ms.*?P99:\s*([\d.]+).*?TOTAL VECTOR QPS:\s*([\d.]+).*?NOPM:\s*(\d+).*?TPM:\s*(\d+)',
+        content, re.DOTALL | re.IGNORECASE
+    )
+    results = {}
 
-    summary_section = re.search(r'>>>>> SUMMARY OF \d+ ACTIVE VIRTUAL USERS.*?TOTAL VECTOR QPS:.*?TPM:.*?\n', content, re.DOTALL)
+    for summary in summaries:
+        user_count = int(summary[0])
+        avg_latency = float(summary[1])
+        p99_latency = float(summary[2])
+        total_vector_qps = float(summary[3])
+        tpm = int(summary[4])
+        nopm = int(summary[5])
 
-    if summary_section:
-        summary = summary_section.group()
-        qps = re.search(r'TOTAL VECTOR QPS: ([\d.]+)', summary)
-        nopm = re.search(r'NOPM: (\d+)', summary)
-        tpm = re.search(r'TPM: (\d+)', summary)
-        
-        p99_latency = re.search(r'P99: ([\d.]+)ms', content)
-        
-        return {
-            "Total Vector QPS": float(qps.group(1)) if qps else None,
-            "NOPM": int(nopm.group(1)) if nopm else None,
-            "TPM": int(tpm.group(1)) if tpm else None,
-            "P99 Latency": float(p99_latency.group(1)) if p99_latency else None
+        results[user_count] = {
+            "Total Vector QPS": total_vector_qps,
+            "TPM": tpm,
+            "NOPM": nopm,
+            "avg_latency": avg_latency,
+            "P99 Latency": p99_latency
         }
-    return {}
+
+    return results
 
 def extract_from_log_txt(file_path):
     result = {}
@@ -48,21 +53,22 @@ def extract_from_json(file_path):
 
 def main():
     for root, _, file_names in os.walk(args.results_dir_path):
+        combined_data = {}
         for file_name in file_names:
-            print(file_name)
             if file_name == "log.txt":
-                bm_run_logs = extract_from_log_txt(os.path.join(root, file_name))
+                combined_data["config"] = extract_from_log_txt(os.path.join(root, file_name))
             elif args.benchmark == "HammerDB" and file_name == "hdbxtprofile.log":
-                hdbxtprofile = extract_from_hdbxtprofile(os.path.join(root, file_name))
-            elif file_name.endswith(".json"):
-                vectordb_results = extract_from_json(os.path.join(root, file_name))
-    combined_data = bm_run_logs
-    combined_data["vectordb"] = vectordb_results["results"]
-    if args.benchmark == "HammerDB":
-        combined_data["HammerDB"] = hdbxtprofile
-    
-    with open("combined_results.json", "w") as outfile:
-        json.dump(combined_data, outfile, indent=4)
+                combined_data["HammerDB"] = extract_from_hdbxtprofile(os.path.join(root, file_name))
+            elif file_name.startswith("result") and file_name.endswith(".json"):
+                combined_data["vectordb"] = extract_from_json(os.path.join(root, file_name))['results']
+
+        if len(file_names) > 0:
+            result_file_name = root.split("/")[-1] + "-results.json"
+            with open(os.path.join(root, result_file_name), "w") as result_file:
+                json.dump(combined_data, result_file, indent=4)
+                print(f"File saved in {root}")
+
+    print("Results combined successfully")
 
 if __name__ == "__main__":
     main()
