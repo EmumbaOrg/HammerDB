@@ -265,6 +265,9 @@ def run_benchmark(case, db_config, hammerdb_config):
                         current_configs = query_configurations(db_config)
                         for key, value in current_configs.items():
                             print(f"{key}: {value}")
+                        print("HammerDB configurations:")
+                        for key, value in hammerdb_config.items():
+                            print(f"{key}: {value}")
                         print(f"Running command: {' '.join(command)}")
                         f.flush()
                     
