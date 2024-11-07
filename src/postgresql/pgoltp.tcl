@@ -453,9 +453,25 @@ proc CreateStoredProcs { lda ora_compatible citus_compatible pg_storedprocs } {
             WHEN serialization_failure OR deadlock_detected OR no_data_found
             THEN ROLLBACK;
         END; }
+        set sql(7) { CREATE OR REPLACE PROCEDURE SEMANTIC_SEARCH (
+            emb		        IN VECTOR,
+            k			    IN INTEGER,
+            neighbors       OUT BIGINT[])
+            IS
+            BEGIN
+            SELECT id INTO neighbors
+            FROM public.pg_vector_collection
+            ORDER BY embedding <=> emb
+            LIMIT k;
+            COMMIT;
+            EXCEPTION
+            WHEN serialization_failure OR deadlock_detected OR no_data_found
+            THEN ROLLBACK;
+            END;
+        }
         if { $citus_compatible eq "true" } {
-            set sql(7) { SELECT create_distributed_function('dbms_random(int,int)') }
-            set sql(8) { SELECT create_distributed_function(oid, '$1', colocate_with:='warehouse') FROM pg_catalog.pg_proc WHERE proname IN ('neword', 'delivery', 'payment', 'ostat', 'slev') }
+            set sql(8) { SELECT create_distributed_function('dbms_random(int,int)') }
+            set sql(9) { SELECT create_distributed_function(oid, '$1', colocate_with:='warehouse') FROM pg_catalog.pg_proc WHERE proname IN ('neword', 'delivery', 'payment', 'ostat', 'slev') }
         }
         for { set i 1 } { $i <= [array size sql] } { incr i } {
             set result [ pg_exec $lda $sql($i) ]
@@ -1005,6 +1021,24 @@ proc CreateStoredProcs { lda ora_compatible citus_compatible pg_storedprocs } {
                 END;
                 $$
             LANGUAGE 'plpgsql';}
+            set sql(7) { CREATE OR REPLACE PROCEDURE SEMANTIC_SEARCH (
+                in emb		        VECTOR,
+                in k			    int,
+                out neighbors   BIGINT[] ) language plpgsql
+                as $$
+                BEGIN
+                SELECT ARRAY(
+                SELECT id
+                FROM public.pg_vector_collection
+                ORDER BY embedding <=> emb
+                LIMIT k
+                ) INTO neighbors;
+                EXCEPTION
+                WHEN serialization_failure OR deadlock_detected OR no_data_found
+                THEN ROLLBACK;
+                END;
+                $$
+            }
         } else {
             set sql(1) { CREATE OR REPLACE FUNCTION DBMS_RANDOM (INTEGER, INTEGER) RETURNS INTEGER AS $$
                 DECLARE
@@ -1552,10 +1586,26 @@ proc CreateStoredProcs { lda ora_compatible citus_compatible pg_storedprocs } {
                 END;
                 ' LANGUAGE 'plpgsql';
             }
+            set sql(7) { CREATE OR REPLACE FUNCTION SEMANTIC_SEARCH (VECTOR, INTEGER) RETURNS TABLE(id bigint) AS '
+                DECLARE
+                emb         ALIAS FOR $1;
+                k           ALIAS FOR $2;
+                BEGIN
+                RETURN QUERY
+                SELECT pg_vector_collection.id
+                FROM public.pg_vector_collection
+                ORDER BY embedding <=> emb
+                LIMIT k;
+                EXCEPTION
+                WHEN serialization_failure OR deadlock_detected OR no_data_found
+                THEN ROLLBACK;
+                END;
+                ' LANGUAGE 'plpgsql';
+            }
         }
         if { $citus_compatible eq "true" } {
-            set sql(7) { SELECT create_distributed_function('dbms_random(int,int)') }
-            set sql(8) { SELECT create_distributed_function(oid, '$1', colocate_with:='warehouse') FROM pg_catalog.pg_proc WHERE proname IN ('neword', 'delivery', 'payment', 'ostat', 'slev') }
+            set sql(8) { SELECT create_distributed_function('dbms_random(int,int)') }
+            set sql(9) { SELECT create_distributed_function(oid, '$1', colocate_with:='warehouse') FROM pg_catalog.pg_proc WHERE proname IN ('neword', 'delivery', 'payment', 'ostat', 'slev') }
         }
         for { set i 1 } { $i <= [array size sql] } { incr i } {
             set result [ pg_exec $lda $sql($i) ]
@@ -1613,20 +1663,21 @@ proc CreateUserDatabase { lda host port sslmode db tspace superuser superuser_pa
     if { [pg_result $result -numTuples] == 0} {
         set sql($stmnt_count) "CREATE DATABASE \"$db\" OWNER \"$user\""
     } else {
-        set existing_db [ ConnectToPostgres $host $port $sslmode $superuser $superuser_password $db ]
-        if { $existing_db eq "Failed" } {
-            error "error, the database connection to $host could not be established"
-        } else {
-            set result [ pg_exec $existing_db "SELECT 1 FROM pg_tables WHERE schemaname = 'public'"]
-            if { [pg_result $result -numTuples] == 0 } {
-                puts "Using existing empty Database $db for Schema build"
-                set sql($stmnt_count) "ALTER DATABASE \"$db\" OWNER TO \"$user\""
-            } else {
-                puts "Database with tables $db exists"
-                error "Database $db exists but is not empty, specify a new or empty database name"
-            }
-        }
-        pg_disconnect $existing_db
+        # Comment this section, because vector db schema will be generated before running mixed workload.
+        # set existing_db [ ConnectToPostgres $host $port $sslmode $superuser $superuser_password $db ]
+        # if { $existing_db eq "Failed" } {
+        #     error "error, the database connection to $host could not be established"
+        # } else {
+        #     set result [ pg_exec $existing_db "SELECT 1 FROM pg_tables WHERE schemaname = 'public'"]
+        #     if { [pg_result $result -numTuples] == 0 } {
+        #         puts "Using existing empty Database $db for Schema build"
+        #         set sql($stmnt_count) "ALTER DATABASE \"$db\" OWNER TO \"$user\""
+        #     } else {
+        #         puts "Database with tables $db exists"
+        #         error "Database $db exists but is not empty, specify a new or empty database name"
+        #     }
+        # }
+        # pg_disconnect $existing_db
     }
     if { $tspace != "pg_default" } {
         incr stmnt_count
@@ -2102,10 +2153,10 @@ proc do_tpcc { host port sslmode count_ware superuser superuser_password default
         if { $lda eq "Failed" } {
             error "error, the database connection to $host could not be established"
         } else {
-            CreateUserDatabase $lda $host $port $sslmode $db $tspace $superuser $superuser_password $user $password
-            set result [ pg_exec $lda "commit" ]
-            pg_result $result -clear
-            pg_disconnect $lda
+            # CreateUserDatabase $lda $host $port $sslmode $db $tspace $superuser $superuser_password $user $password
+            # set result [ pg_exec $lda "commit" ]
+            # pg_result $result -clear
+            # pg_disconnect $lda
             set lda [ ConnectToPostgres $host $port $sslmode $user $password $db ]
             if { $lda eq "Failed" } {
                 error "error, the database connection to $host could not be established"
@@ -2800,12 +2851,41 @@ pg_disconnect $lda}
 }
 
 proc loadtimedpgtpcc { } {
-    global opmode _ED
+    global opmode _ED vindex
+    upvar #0 vectordbdict vectordbdict
     upvar #0 dbdict dbdict
     if {[dict exists $dbdict postgresql library ]} {
         set library [ dict get $dbdict postgresql library ]
     } else { set library "Pgtcl" }
     upvar #0 configpostgresql configpostgresql
+
+    if {[dict exists $vectordbdict $vindex]} {
+        set index_params [dict create]
+        set search_params [dict create]
+        set session_params [dict create]
+        set index_creation_with_options [dict create]
+
+        foreach {key value} [dict get $vectordbdict $vindex] {
+            if {[string match "in_*" $key]} {
+                set param_key [string range $key 3 end]
+                dict set index_params $param_key $value
+            } elseif {[string match "se_*" $key]} {
+                set param_key [string range $key 3 end]
+                dict set search_params $param_key $value
+            } elseif {[string match "ss_*" $key]} {
+                set param_key [string range $key 3 end]
+                dict set session_params $param_key $value
+            } elseif {[string match "ino_*" $key]} {
+                set param_key [string range $key 4 end]
+                dict set index_creation_with_options $param_key $value
+            }
+        }
+    } else {
+        error "Index configuration for $vindex not found in vectordbdict"
+    }
+    set mw_vu_ratio [dict get $vectordbdict mixed_workload mw_oltp_vector_vu_ratio]
+    set vector_table_name [dict get $vectordbdict mixed_workload vector_table_name]
+
     #set variables to values in dict
     setlocaltpccvars $configpostgresql
     ed_edit_clear
@@ -2816,6 +2896,13 @@ proc loadtimedpgtpcc { } {
         .ed_mainFrame.mainwin.textFrame.left.text fastinsert end "#!/usr/local/bin/tclsh8.6
 #EDITABLE OPTIONS##################################################
 set library $library ;# PostgreSQL Library
+set vindex $vindex ;# PostgreSQL Vector Index Alogrithm
+set search_params {$search_params} ;# Vector DB Dictionary
+set session_params {$session_params} ;# Vector DB Dictionary
+set index_params {$index_params} ;# Vector DB Dictionary
+set index_creation_with_options {$index_creation_with_options} ;# Vector DB Dictionary
+set mw_vu_ratio $mw_vu_ratio ;# Mixed Workload VUs Ratio
+set vector_table_name $vector_table_name ;# Vector table name used in VDBBench
 set total_iterations $pg_total_iterations ;# Number of transactions before logging off
 set RAISEERROR \"$pg_raiseerror\" ;# Exit script on PostgreSQL (true or false)
 set KEYANDTHINK \"$pg_keyandthink\" ;# Time for user thinking and keying (true or false)
@@ -2871,8 +2958,10 @@ proc CheckDBVersion { lda1 } {
         }
 
 set rema [ lassign [ findvuposition ] myposition totalvirtualusers ]
-switch $myposition {
-    1 { 
+set workload1vu [expr [expr ceil([expr $mw_vu_ratio * [expr $totalvirtualusers - 1]])] + 1]
+
+if {$myposition == 1} {
+        ######MONITOR THREAD######
         if { $mode eq "Local" || $mode eq "Primary" } {
             if { ($DRITA_SNAPSHOTS eq "true") || ($VACUUM eq "true") } {
                 set lda [ ConnectToPostgres $host $port $sslmode $superuser $superuser_password $default_database ]
@@ -2883,7 +2972,8 @@ switch $myposition {
             set lda1 [ ConnectToPostgres $host $port $sslmode $user $password $db ]
             if { $lda1 eq "Failed" } {
                 error "error, the database connection to $host could not be established"
-            } 
+            }
+
             set ramptime 0
 	    puts [ CheckDBVersion $lda1 ]
             puts "Beginning rampup time of $rampup minutes"
@@ -2924,8 +3014,10 @@ switch $myposition {
             }
             puts "Timing test period of $duration in minutes"
             set testtime 0
+            global durmin
             set durmin $duration
             set duration [ expr $duration*60000 ]
+            tsv::set application ramp_done 1
             while {$testtime != $duration} {
                 if { [ tsv::get application abort ] } { break } else { after 6000 }
                 set testtime [ expr $testtime+6000 ]
@@ -2961,6 +3053,7 @@ switch $myposition {
             pg_select $lda1 "select sum(d_next_o_id) from district" o_id_arr {
                 set end_nopm $o_id_arr(sum)
             }
+            global nopm tpm
             set tpm [ expr {($end_trans - $start_trans)/$durmin} ]
             set nopm [ expr {($end_nopm - $start_nopm)/$durmin} ]
             puts "[ expr $totalvirtualusers - 1 ] Active Virtual Users configured"
@@ -2999,15 +3092,16 @@ switch $myposition {
         } else {
             puts "Operating in Replica Mode, No Snapshots taken..."
         }
-    }
-    default {
+    } elseif {$myposition <= $workload1vu} {
+        ######START OLTP WORKLOAD######
+
         #TIMESTAMP
         proc gettimestamp { } {
             set tstamp [ clock format [ clock seconds ] -format %Y%m%d%H%M%S ]
             return $tstamp
         }
         #NEW ORDER
-        proc neword { lda no_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
+        proc neword_base { lda no_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
             #2.4.1.2 select district id randomly from home warehouse where d_w_id = d_id
             set no_d_id [ RandomNumber 1 10 ]
             #2.4.1.2 Customer id randomly selected where c_d_id = d_id and c_w_id = w_id
@@ -3037,7 +3131,7 @@ switch $myposition {
             }
         }
         #PAYMENT
-        proc payment { lda p_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
+        proc payment_base { lda p_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
             #2.5.1.1 The home warehouse id remains the same for each terminal
             #2.5.1.1 select district id randomly from home warehouse where d_w_id = d_id
             set p_d_id [ RandomNumber 1 10 ]
@@ -3094,7 +3188,7 @@ switch $myposition {
             }
         }
         #ORDER_STATUS
-        proc ostat { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
+        proc ostat_base { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
             #2.5.1.1 select district id randomly from home warehouse where d_w_id = d_id
             set d_id [ RandomNumber 1 10 ]
             set nrnd [ NURand 255 0 999 123 ]
@@ -3129,7 +3223,7 @@ switch $myposition {
             }
         }
         #DELIVERY
-        proc delivery { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
+        proc delivery_base { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
             set carrier_id [ RandomNumber 1 10 ]
             set date [ gettimestamp ]
             if { $ora_compatible eq "true" } {
@@ -3153,7 +3247,7 @@ switch $myposition {
             }
         }
         #STOCK LEVEL
-        proc slev { lda w_id stock_level_d_id RAISEERROR ora_compatible pg_storedprocs } {
+        proc slev_base { lda w_id stock_level_d_id RAISEERROR ora_compatible pg_storedprocs } {
             set threshold [ RandomNumber 10 20 ]
             if { $ora_compatible eq "true" } {
                 set result [pg_exec $lda "exec slev($w_id,$stock_level_d_id,$threshold)" ]
@@ -3213,7 +3307,61 @@ switch $myposition {
         pg_select $lda "select max(d_id) from district" d_id_input_arr {
             set d_id_input $d_id_input_arr(max)
         }
-        set stock_level_d_id  [ RandomNumber 1 $d_id_input ]  
+        set stock_level_d_id  [ RandomNumber 1 $d_id_input ]
+
+        puts "Processing $total_iterations transactions with output suppressed..."
+        set abchk 1; set abchk_mx 1024; set hi_t [ expr {pow([ lindex [ time {if {  [ tsv::get application abort ]  } { break }} ] 0 ],2)}]
+        for {set it 0} {$it < $total_iterations} {incr it} {
+            if { [expr {$it % $abchk}] eq 0 } { if { [ time {if {  [ tsv::get application abort ]  } { break }} ] > $hi_t }  {  set  abchk [ expr {min(($abchk * 2), $abchk_mx)}]; set hi_t [ expr {$hi_t * 2} ] } }
+            if { [ tsv::get application ramp_done ] } {
+                puts "Ramp up time is complete, moving on..."
+                break
+            }
+            set choice [ RandomNumber 1 23 ]
+            if {$choice <= 10} {
+                if { $KEYANDTHINK } { keytime 18 }
+                neword_base $lda $w_id $w_id_input $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 12 }
+            } elseif {$choice <= 20} {
+                if { $KEYANDTHINK } { keytime 3 }
+                payment_base $lda $w_id $w_id_input $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 12 }
+            } elseif {$choice <= 21} {
+                if { $KEYANDTHINK } { keytime 2 }
+                delivery_base $lda $w_id $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 10 }
+            } elseif {$choice <= 22} {
+                if { $KEYANDTHINK } { keytime 2 }
+                slev_base $lda $w_id $stock_level_d_id $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 5 }
+            } elseif {$choice <= 23} {
+                if { $KEYANDTHINK } { keytime 2 }
+                ostat_base $lda $w_id $RAISEERROR $ora_compatible $pg_storedprocs
+                if { $KEYANDTHINK } { thinktime 5 }
+            }
+        }
+
+        proc neword { lda no_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
+            neword_base $lda $no_w_id $w_id_input $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        proc payment { lda p_w_id w_id_input RAISEERROR ora_compatible pg_storedprocs } {
+            payment_base $lda $p_w_id $w_id_input $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        proc ostat { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
+            ostat_base $lda $w_id $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        proc delivery { lda w_id RAISEERROR ora_compatible pg_storedprocs } {
+            delivery_base $lda $w_id $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        proc slev { lda w_id stock_level_d_id RAISEERROR ora_compatible pg_storedprocs } {
+            slev_base $lda $w_id $stock_level_d_id $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+
+        puts "STARTING ACTUAL RUN"
         puts "Processing $total_iterations transactions with output suppressed..."
         set abchk 1; set abchk_mx 1024; set hi_t [ expr {pow([ lindex [ time {if {  [ tsv::get application abort ]  } { break }} ] 0 ],2)}]
         for {set it 0} {$it < $total_iterations} {incr it} {
@@ -3241,9 +3389,184 @@ switch $myposition {
                 if { $KEYANDTHINK } { thinktime 5 }
             }
         }
+
+        ######END OLTP WORKLOAD######
         pg_disconnect $lda
-    }
-}}
+    } else {
+        ######START VECTOR WORKLOAD######
+
+        proc gettimestamp { } {
+            set tstamp [ clock format [ clock seconds ] -format %Y%m%d%H%M%S ]
+            return $tstamp
+        }
+
+        proc semantic_search_base { lda emb k RAISEERROR ora_compatible pg_storedprocs } {
+            if {[llength $emb] > 0} {
+                # We won't be using stored procedures for vector search
+                set result [ pg_exec_prepared $lda knn {} {} "\[$emb\]" $k ]
+                if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
+                    if { $RAISEERROR } {
+                        error "[pg_result $result -error]"
+                    } else {
+                        puts "Vector Level Procedure Error set RAISEERROR for Details"
+                    }
+                }
+                pg_result $result -clear
+            }
+        }
+
+        proc fn_prep_statement { lda dist_op } {
+            upvar #1 vector_table_name vector_table_name
+            set prep_semantic_search "PREPARE knn(VECTOR, INT) AS SELECT id FROM $vector_table_name ORDER BY embedding $dist_op \$1 LIMIT \$2;"
+            set result [ pg_exec $lda $prep_semantic_search ]
+            if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
+                error "[pg_result $result -error]"
+            } else {
+                pg_result $result -clear
+            }
+        }
+
+        proc get_distance_op { dist_op } {
+            set operator <=>
+            if { $dist_op eq "cosine" } {
+                set operator <=>
+            } elseif { $dist_op eq "euclidean" } {
+                set operator <->
+            } elseif { $dist_op eq "neg_inner_product" } {
+                set operator <#>
+            } elseif { $dist_op eq "taxicab" } {
+                set operator <+>
+            }
+            return $operator
+        }
+
+        #RUN TPC-C
+        set dist_op [ get_distance_op [dict get $search_params distance ] ]
+        set lda [ ConnectToPostgres $host $port $sslmode $user $password $db ]
+        if { $lda eq "Failed" } {
+            error "error, the database connection to $host could not be established"
+        } else {
+            if { $ora_compatible eq "true" } {
+                set result [ pg_exec $lda "exec dbms_output.disable" ]
+                pg_result $result -clear
+            } elseif { $pg_storedprocs eq "true" } {
+                ;
+            } else {
+                fn_prep_statement $lda $dist_op
+            }
+        }
+
+        proc set_session_params { lda } {
+            upvar #1 session_params session_params
+            upvar #1 vindex vindex
+            foreach {option val} $session_params {
+                set result [pg_exec $lda "SET $option='$val'"]
+                if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
+                    puts "Error setting HNSW $option parameter: [pg_result $result -error]"
+                }
+                pg_result $result -clear
+            }
+        }
+        proc set_index_params { lda } {
+            upvar #1 index_params index_params
+            foreach {option val} $index_params {
+                set result [pg_exec $lda "SET $option='$val'"]
+                if {[pg_result $result -status] ni {"PGRES_TUPLES_OK" "PGRES_COMMAND_OK"}} {
+                    puts "Error setting HNSW $option parameter: [pg_result $result -error]"
+                }
+                pg_result $result -clear
+            }
+        }
+        set_session_params $lda
+
+        global vector_test_dataset
+        set vector_query_count 0
+        set vector_data_idx 0
+        set k [dict get $search_params k ]
+        #TODO good for debugging, can be removed 
+        set counter 0
+
+        puts "Processing $total_iterations vector transactions with output suppressed..."
+        set abchk 1; set abchk_mx 1024; set hi_t [ expr {pow([ lindex [ time {if {  [ tsv::get application abort ]  } { break }} ] 0 ],2)}]
+        
+        set start [clock seconds]
+        puts "Start time: $start"
+
+        # First forloop is stop either:
+        # 1) If total_iterations reached
+        # 2) If the shared variable `abort` is set to true, which likely means the time completed
+        # 3) If the first ramp up is complete. Note rampup is checked in each iteration, not optimum, hence we have a separate loop for the actual run.
+        
+        for {set it 0} {$it < $total_iterations} {incr it} {
+            if { [expr {$it % $abchk}] eq 0 } { if { [ time {if {  [ tsv::get application abort ]  } { break }} ] > $hi_t }  {  set  abchk [ expr {min(($abchk * 2), $abchk_mx)}]; set hi_t [ expr {$hi_t * 2} ] } }
+            if { [ tsv::get application ramp_done ] } {
+                puts "Ramp up time is complete, moving on..."
+                break
+            }
+            set row [ lindex $vector_test_dataset $vector_data_idx ] 
+            set emb [lindex $row 1]
+            
+            if { $KEYANDTHINK } { keytime 2 }
+            semantic_search_base $lda $emb $k $dist_op $RAISEERROR $ora_compatible $pg_storedprocs
+            if { $KEYANDTHINK } { thinktime 5 }
+            incr counter
+            incr vector_data_idx
+            incr vector_query_count
+            if { [expr [llength $vector_test_dataset] - 1 ] <= $vector_data_idx } {
+                set vector_data_idx 0
+            }
+            #TODO remove before final push. This is good for verification
+            puts "Total vector QPS: {$vector_query_count}"
+            puts "Vector data index: {$vector_data_idx}"
+        }
+        set end [clock seconds]
+        puts "End time (rampup): $end"
+        puts "End Counter $counter"
+        puts "Duration [expr {$end - $start}]"
+
+        proc semantic_search { lda emb k dist_op RAISEERROR ora_compatible pg_storedprocs } {
+            semantic_search_base $lda $emb $k $dist_op $RAISEERROR $ora_compatible $pg_storedprocs
+        }
+        puts "Processing $total_iterations vector transactions with output suppressed..."
+        set start [clock seconds]
+        set abchk 1; set abchk_mx 1024; set hi_t [ expr {pow([ lindex [ time {if {  [ tsv::get application abort ]  } { break }} ] 0 ],2)}]
+        set counter 0
+
+        # Second forloop is stopped either:
+        # 1) If total_iterations reached
+        # 2) If the shared variable `abort` is set to true, which likely means the time completed
+
+        puts "STARTING ACTUAL RUN"
+        #TODO Can add conditional wait to sync all threads
+        puts "Start time: $start"
+        for {set it $counter} {$it < $total_iterations} {incr it} {
+            if { [expr {$it % $abchk}] eq 0 } { if { [ time {if {  [ tsv::get application abort ]  } { break }} ] > $hi_t }  {  set  abchk [ expr {min(($abchk * 2), $abchk_mx)}]; set hi_t [ expr {$hi_t * 2} ] } }
+            set row [ lindex $vector_test_dataset $vector_data_idx ] 
+            set emb [lindex $row 1]
+            
+            if { $KEYANDTHINK } { keytime 2 }
+            semantic_search $lda $emb $k $dist_op $RAISEERROR $ora_compatible $pg_storedprocs
+            if { $KEYANDTHINK } { thinktime 5 }
+            
+            incr counter
+            incr vector_data_idx
+            incr vector_query_count
+            if { [expr [llength $vector_test_dataset] - 1 ] <= $vector_data_idx } {
+                set vector_data_idx 0
+            }
+            #TODO remove before final push. This is good for verification
+            puts "Total vector QPS: {$vector_query_count}"
+            puts "Vector data index: {$vector_data_idx}"
+        }
+        set end [clock seconds]
+        puts "End time (final): $end"
+        puts "End Counter $counter"
+        puts "Duration [expr {$end - $start}]"
+
+        ######END VECTOR WORKLOAD######
+        pg_disconnect $lda
+    } 
+}
         if { $pg_connect_pool } {
             insert_pgconnectpool_drivescript timed sync
         }

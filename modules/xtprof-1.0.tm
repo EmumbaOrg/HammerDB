@@ -94,6 +94,35 @@ tsv::unset allclicktimings
         }
     }
 
+proc findresultsdir {} {
+global env
+        set result "."       ;
+        if {[string match windows $::tcl_platform(platform)]} {
+            if {[info exists env(RESULTS_LOCAL_DIR)] && [file isdirectory $env(RESULTS_LOCAL_DIR)] \
+                    && [file writable $env(RESULTS_LOCAL_DIR)]} {
+                return $env(RESULTS_LOCAL_DIR)
+            }
+            if {[file isdirectory C:/TEMP] && [file writable C:/TEMP]} {
+                return C:/TEMP
+            }
+            if {[file isdirectory C:/] && [file writable C:/]} {
+                return C:/
+            }
+        } else { ;
+            if {[info exists env(RESULTS_LOCAL_DIR)] && [file isdirectory $env(RESULTS_LOCAL_DIR)] \
+                    && [file writable $env(RESULTS_LOCAL_DIR)]} {
+                return $env(RESULTS_LOCAL_DIR)
+            }
+            if {[file isdirectory env()] && [file writable /tmp]} {
+                return /tmp
+            }
+        }
+        if {[file writable .]} {
+            return .
+        }
+	return notmpdir
+    }
+
 proc findtempdir {} {
 global env
         set result "."       ;
@@ -273,6 +302,10 @@ set xtto 600
 #Set xtgather_timout in case decided to print this value in future
 set xtgather_timeout 10
 }
+
+#Don't store output in SQLite
+set xtjob_storage 0
+
 #Wait for xtto seconds for all virtual users to have set their timing data in the thread shared keyed list
 for {set clnt 1} { $clnt <= $xtto } {incr clnt} {
 set alldone true
@@ -310,12 +343,12 @@ dict set endms $f [ tsv::keylget allclicktimings $f endms ]
 if { [ llength [ dict keys $monitortimings ]] != [ expr $totalvirtualusers - 1 ] } {
 puts "[ llength [ dict keys $monitortimings ]] out of [ expr $totalvirtualusers - 1 ] Virtual Users reported"
 }
-#At 2nd level all unique keys should typically be neword payment delivery slev ostat
+#At 2nd level all unique keys should typically be neword payment delivery slev ostat semantic_search
 set lev2uniquekeys [ lsort -unique [concat {*}[lmap k1 [dict keys $monitortimings] {dict keys [dict get $monitortimings $k1]}]]]
-if { ![ string equal "delivery neword ostat payment slev" $lev2uniquekeys ]} { 
-puts "WARNING:Timing data returned values for functions different than expected delivery neword ostat payment slev: $lev2uniquekeys"
+if { ![ string equal "delivery neword ostat payment semantic_search slev" $lev2uniquekeys ]} { 
+puts "WARNING:Timing data returned values for functions different than expected delivery neword ostat payment slev semantic_search: $lev2uniquekeys"
 }
-set tmpdir [ findtempdir ]
+set tmpdir [ findresultsdir ]
 if { $tmpdir != "notmpdir" } {
         if { $xtunique_log_name eq 1 } {
         set guidid [ guid ]
@@ -352,6 +385,12 @@ unset -nocomplain jobid
 set jobid [ hdb eval {select jobid from JOBMAIN order by datetime(timestamp) DESC LIMIT 1} ]
 	}
 }
+
+global durmin
+set dursec [expr $durmin*60]
+set vector_qps 0
+set total_vqueries 0
+
 set vustoreport [ dict keys $monitortimings ]
 for { set vutri 0 } { $vutri < [llength $vustoreport] } { incr vutri } {
 	set vutr [ lindex $vustoreport $vutri ]
@@ -372,7 +411,7 @@ if { $xtjob_storage eq 1 } {
 #DEBUG insert into JOBTIMINGS TABLE
 #puts [ subst {INSERT INTO JOBTIMING(jobid,vu,procname,calls,min,avg,max,total,p99,p95,p50,sd,ratio,summary,elapsed) VALUES($jobid,$vutr,[format "%s" [ string toupper $sproc]],[format "%d" [dict get $monitortimings $vutr $sproc calls]],[format "%.3f" [dict get $monitortimings $vutr $sproc min]],[format "%.3f" [dict get $monitortimings $vutr $sproc avgms]],[format "%.3f" [dict get $monitortimings $vutr $sproc max]],[format "%.3f" [dict get $monitortimings $vutr $sproc totalms]],[format "%.3f" [dict get $monitortimings $vutr $sproc p99]],[format "%.3f" [dict get $monitortimings $vutr $sproc p95]],[format "%.3f" [dict get $monitortimings $vutr $sproc p50]],[format "%.3f" [dict get $monitortimings $vutr $sproc sd]],[format "%.3f" [dict get $monitortimings $vutr $sproc ratio] 37],0,[dict get $monitortimings $vutr [lindex $sprocorder 1] elapsed])} ]
 #Insert XTprof timing data into JobTiming table for each Virtual User
-hdb eval [ subst {INSERT INTO JOBTIMING(jobid,vu,procname,calls,min_ms,avg_ms,max_ms,total_ms,p99_ms,p95_ms,p50_ms,sd,ratio_pct,summary,elapsed_ms) VALUES('$jobid',$vutr,'[format "%s" [ string toupper $sproc]]',[format "%d" [dict get $monitortimings $vutr $sproc calls]],[format "%.3f" [dict get $monitortimings $vutr $sproc min]],[format "%.3f" [dict get $monitortimings $vutr $sproc avgms]],[format "%.3f" [dict get $monitortimings $vutr $sproc max]],[format "%.3f" [dict get $monitortimings $vutr $sproc totalms]],[format "%.3f" [dict get $monitortimings $vutr $sproc p99]],[format "%.3f" [dict get $monitortimings $vutr $sproc p95]],[format "%.3f" [dict get $monitortimings $vutr $sproc p50]],[format "%.3f" [dict get $monitortimings $vutr $sproc sd]],[format "%.3f" [dict get $monitortimings $vutr $sproc ratio] 37],0,[dict get $monitortimings $vutr [lindex $sprocorder 1] elapsed])} ]
+hdb eval [ subst {INSERT INTO JOBTIMING(jobid,vu,procname,calls,min_ms,avg_ms,max_ms,total_ms,p99_ms,p95_ms,p50_ms,sd,ratio_pct,summary,elapsed_ms) VALUES('$jobid',$vutr,'[format "%s" [ string toupper $sproc]]',[format "%d" [dict get $monitortimings $vutr $sproc calls]],[format "%.3f" [dict get $monitortimings $vutr $sproc min]],[format "%.3f" [dict get $monitortimings $vutr $sproc avgms]],[format "%.3f" [dict get $monitortimings $vutr $sproc max]],[format "%.3f" [dict get $monitortimings $vutr $sproc totalms]],[format "%.3f" [dict get $monitortimings $vutr $sproc p99]],[format "%.3f" [dict get $monitortimings $vutr $sproc p95]],[format "%.3f" [dict get $monitortimings $vutr $sproc p50]],[format "%.3f" [dict get $monitortimings $vutr $sproc sd]],[format "%.3f" [dict get $monitortimings $vutr $sproc ratio] 37],0,[dict get $monitortimings $vutr [lindex $sprocorder 0] elapsed])} ]
 #Add the timings to a list of timings for the same stored proc for all virtual users
 #At this point [dict get $monitortimings $vutr $sproc clickslist] will return all unsorted data points for vuser $vutr for stored proc $sproc
 #To record all individual data points for a virtual user write the output of this command to a file
@@ -382,7 +421,7 @@ hdb eval [ subst {INSERT INTO JOBTIMING(jobid,vu,procname,calls,min_ms,avg_ms,ma
 		}
 	} 
             puts $fd "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+"
-            puts $fd [format ">>>>> VIRTUAL USER %s : ELAPSED TIME : %.0fms" $vutr [dict get $monitortimings $vutr [lindex $sprocorder 1] elapsed]]
+            puts $fd [format ">>>>> VIRTUAL USER %s : ELAPSED TIME : %.0fms" $vutr [dict get $monitortimings $vutr [lindex $sprocorder 0] elapsed]]
 	foreach sproc $sprocorder {
             puts $fd [format ">>>>> PROC: %s" [ string toupper $sproc]]
             puts -nonewline $fd [format "CALLS: %d\t" [dict get $monitortimings $vutr $sproc calls]] 
@@ -395,6 +434,11 @@ hdb eval [ subst {INSERT INTO JOBTIMING(jobid,vu,procname,calls,min_ms,avg_ms,ma
             puts -nonewline $fd [format "P50: %.3fms\t" [dict get $monitortimings $vutr $sproc p50]]
             puts -nonewline $fd [format "SD: %.3f\t" [dict get $monitortimings $vutr $sproc sd]]
             puts $fd [format "RATIO: %.3f%c" [dict get $monitortimings $vutr $sproc ratio] 37]
+            if { $sproc eq "semantic_search" } {
+                set vector_qps [expr [dict get $monitortimings $vutr $sproc calls] / $dursec]
+                set total_vqueries [expr {$total_vqueries + [dict get $monitortimings $vutr $sproc calls]}]
+                puts -nonewline $fd [format "QPS: %.2f\n" $vector_qps] 
+            }
 #Add the timings to a list of timings for the same stored proc for all virtual users
 #At this point [dict get $monitortimings $vutr $sproc clickslist] will return all unsorted data points for vuser $vutr for stored proc $sproc
 #To record all individual data points for a virtual user write the output of this command to a file
@@ -447,7 +491,8 @@ foreach sproc $sprocorder {
 #Insert summary timings into JOBTIMING table, summary identified by summary column eq 1
 hdb eval [ subst {INSERT INTO JOBTIMING(jobid,vu,procname,calls,min_ms,avg_ms,max_ms,total_ms,p99_ms,p95_ms,p50_ms,sd,ratio_pct,summary,elapsed_ms) VALUES('$jobid',[llength $vustoreport],'[format "%s" [ string toupper $sproc]]',[format "%d" [dict get $sumtimings $sproc calls]],[format "%.3f" [dict get $sumtimings $sproc min]],[format "%.3f" [dict get $sumtimings $sproc avgms]],[format "%.3f" [dict get $sumtimings $sproc max]],[format "%.3f" [dict get $sumtimings $sproc totalms]],[format "%.3f" [dict get $sumtimings $sproc p99]],[format "%.3f" [dict get $sumtimings $sproc p95]],[format "%.3f" [dict get $sumtimings $sproc p50]],[format "%.3f" [dict get $sumtimings $sproc sd]],[format "%.3f" [dict get $sumtimings $sproc ratio] 37],1,$medianendms)} ]
 		}
-	} 
+	}
+        global nopm tpm
         puts $fd "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+"
      puts $fd [format ">>>>> SUMMARY OF [llength $vustoreport] ACTIVE VIRTUAL USERS : MEDIAN ELAPSED TIME : %.0fms" $medianendms]
 foreach sproc $sprocorder {
@@ -463,6 +508,11 @@ foreach sproc $sprocorder {
             puts -nonewline $fd [format "SD: %.3f\t" [dict get $sumtimings $sproc sd]]
             puts $fd [format "RATIO: %.3f%c" [dict get $sumtimings $sproc ratio] 37]
 	}
+        set mediands [expr {$medianendms/1000}]
+        set total_vqps [expr $total_vqueries / double($mediands)]
+        puts $fd [format "TOTAL VECTOR QPS: %.2f" $total_vqps]
+        puts $fd [format "NOPM: %d" $nopm]
+        puts $fd [format "TPM: %d" $tpm]
         puts $fd "+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+"
 close $fd
 }
@@ -535,7 +585,7 @@ proc xttimeprofdump {myposition} {
     rename proc _proc
     
     _proc proc {name arglist body} {
-				    if { $name in {neword payment delivery slev ostat} } {
+				    if { $name in {neword payment delivery slev ostat semantic_search} } {
                                     #===================================        
                                     # Allow multiple namespace use [JMN]
                                     if { ![string match ::* $name] } {

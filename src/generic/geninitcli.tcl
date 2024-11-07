@@ -75,6 +75,19 @@ foreach { key } [ dict keys $dbdict ] {
     lappend dbsrclist "$key/$prefix\opt.tcl" "$key/$prefix\oltp.tcl" "$key/$prefix\olap.tcl" "$key/$prefix\otc.tcl"
 }
 
+#Load database config from SQLite vectordb.db
+set vectordbdict [ SQLite2Dict "vectordb" ]
+if { $vectordbdict eq "" } {
+    #Load database config from database.xml
+    set vectordbdict [ ::XML::To_Dict config/vectordb.xml ]
+
+    #Save XML content to SQLite - database.db
+    Dict2SQLite "vectordb" $vectordbdict
+}
+
+global vindex
+set vindex [dict get $genericdict vectordb vindex]
+
 #get_xml_data
 set_global_config $genericdict
 
