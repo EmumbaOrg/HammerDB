@@ -140,8 +140,8 @@ def get_stats(config):
 def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     dbset('db', hammerdb_config['db'])
     dbset('bm', hammerdb_config['bm'])
-    dbset( 'vindex', case['vindex'])
-
+    dbset('vindex', case['vindex'])
+    
     diset('connection','pg_host', db_config['host'])
     diset('connection','pg_port', '5432')
     diset('connection','pg_sslmode','prefer')
@@ -162,7 +162,6 @@ def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     diset('tpcc','pg_timeprofile', hammerdb_config['pg_timeprofile'])
     diset('tpcc','pg_vacuum', hammerdb_config['pg_vacuum'])
     giset("commandline", "keepalive_margin", hammerdb_config['keepalive_margin'])
-    dvset("mixed_workload", "vector_table_name", case["vector_table_name"])
 
 
 def configure_vectordb(l_value_is: str, index: str, case: dict):
@@ -173,8 +172,12 @@ def configure_vectordb(l_value_is: str, index: str, case: dict):
     dvset(index, "in_maintenance_work_mem", case["maintenance-work-mem"])
     dvset(index, "ino_max_neighbors", case["max-neighbors"])
     dvset(index, "ino_l_value_ib", case["l-value-ib"])
-    dvset("mixed_workload", "mw_oltp_vu", case["mw_oltp_vu"])
-    dvset("mixed_workload", "mw_vector_vu", case["mw_vector_vu"])
+    
+    # Pass mw_vu to TCL, let TCL calculate the split
+    mw_vu_percentage = float(case.get("mw_vu", 0.6))
+    print(f"DEBUG pg_tproccv_diskann_run.py: Setting mw_vu={mw_vu_percentage}")
+    dvset("mixed_workload", "mw_vu", str(mw_vu_percentage))
+    print(f"DEBUG pg_tproccv_diskann_run.py: Successfully set mw_vu={mw_vu_percentage}")
 
 def drop_tpcc_schema(db_config: dict):
     conn = psycopg2.connect(
@@ -280,7 +283,6 @@ def run_benchmark(
         print(f"Starting run {run + 1} of {run_count} for case: {case['db-label']}")
         for i, l_value_is in enumerate(case["l-value-is"]):
             configure_hammerdb(db_config, hammerdb_config, case)
-            configure_vectordb(l_value_is, case["vindex"], case)
             command = base_command + ["--l-value-is", str(l_value_is)]
 
             if i > 0 or run > 0:
@@ -345,6 +347,11 @@ def run_benchmark(
                         get_stats(db_config)
                         f.flush()
                         print(f"Running HammerDB TPC-CV with {vu} VUs")
+                        
+                        # CALL configure_vectordb() RIGHT BEFORE run_tpccv()
+                        print(f"DEBUG: Configuring vectordb with mw_vu={case.get('mw_vu', 0.6)} before loadscript")
+                        configure_vectordb(l_value_is, case["vindex"], case)
+                        
                         run_tpccv(vu, output_dir)
                         get_stats(db_config)
                         f.flush()
