@@ -10,202 +10,243 @@ WHAT IT EXTRACTS:
     From hdbxtprofile.log:
         - Vector VU count (counted from SEMANTIC_SEARCH sections)
         - OLTP VU count (calculated: Total VU - Vector VU)
-        - NOPM 
-        - QPS 
+        - NOPM (New Orders Per Minute)
+        - QPS (Queries Per Second)
     
-    From log.txt:
-        - Test parameters (m, ef-construction, maintenance-work-mem, etc.)
-        - Used for case matching
+    From result_*.json files:
+        - Index type (hnsw, hnsw with quantization, diskann, etc)
+        - All test parameters for accurate case identification
     
     From directory name:
         - Run count (e.g., 0, 1, 2 from folder name pattern: *-{run}-{random})
     
-    From config.json:
-        - vindex (hnsw, hnsw_bq, diskann) → mapped to extension names
-        - Multiple test cases configurations
+    From directory path:
+        - db-label for grouping results
 
 HOW IT WORKS:
     1. Walks through results/ directory recursively
-    2. Finds folders containing: hdbxtprofile.log + config.json + log.txt
-    3. Extracts ALL SUMMARY sections (one per num-concurrency value)
-    4. Matches each test to correct case in config.json using parameter scoring
-    5. Groups results by db-label
-    6. Generates separate CSV per db-label (or combined CSV if configured)
-
-CASE MATCHING:
-    When config.json has multiple cases with **same db-label**:
-    - Extracts test parameters from log.txt
-    - Scores each case based on parameter matches:
-        • m value 
-        • ef-construction 
-        • maintenance-work-mem 
-        • max-parallel-workers 
-        • VU configuration match 
-    - Selects highest scoring case for accurate vindex assignment
+    2. Optionally processes archive/ or latest/ subdirectories if present
+    3. Finds folders containing BOTH: hdbxtprofile.log AND result_*.json
+    4. Extracts ALL SUMMARY sections (one per num-concurrency value)
+    5. Reads index type from result JSON 
+    6. Groups results by db-label
+    7. Generates combined CSV (or separate CSV per db-label if configured)
 
 OUTPUT:
     CSV Format: OLTP VU, Vector VU, NOPM, QPS, Run Count, Extension
     
     Files Generated:
-        - Default: mixed_workload_results_{db-label}.csv (one per db-label)
-        - Combined mode: mixed_workload_results_combined.csv (all results)
+        - Default: mixed_workload_results_combined.csv (all results)
+        - Separate mode: mixed_workload_results_{db-label}.csv (one per db-label)
 
     Configuration:
-        - Set COMBINE_ALL = True for single combined CSV
-        - Set COMBINE_ALL = False for separate CSV per db-label (default)
+        - Set COMBINE_ALL = True for single combined CSV (default) or False for separate CSV per db-label 
+        - Set SUBFOLDER = None or "latest" or "archive" for subdirectory processing
 
 HANDLES:
     Multiple num-concurrency values per test (creates separate rows)
     Multiple run counts (run_count: 0, 1, 2, ...)
     Multiple test cases with same db-label
-    Different vector index types (pgvector, pgvector-bq, pgdiskann)
-
+    Different vector index types (pgvector, pgvector-bq, pgdiskann, or custom)
+    Different directory structures (local, azure, etc.)
+    Result JSON in subdirectories or root folder
+    Optional archive/latest subfolder processing
+    Dynamic db-label extraction from various directory structures
+    Error reporting for missing files and failed extractions
 """
-
-
 
 import os
 import re
 import json
 import csv
+import glob
 from pathlib import Path
 from collections import defaultdict
 
-def extract_vindex_to_extension(vindex):
-    """Map vindex to extension name."""
-    mapping = {
-        "hnsw": "pgvector",
-        "hnsw_bq": "pgvector-bq",
-        "diskann": "pgdiskann"
-    }
-    return mapping.get(vindex, vindex)
+
+def extract_index_to_extension(index_type, quantization_type=None, reranking=False):
+    
+    # Map index configuration to extension name
+    # Handle None or empty index_type
+    if not index_type:
+        return "unknown"
+    
+    # Normalize index type to lowercase for comparison
+    index_type_lower = str(index_type).lower()
+    
+    # DiskANN variants
+    if "diskann" in index_type_lower:
+        return "pgdiskann"
+    
+    # HNSW variants
+    if index_type_lower == "hnsw":
+        # Check for binary quantization with reranking
+        if quantization_type == "bit" and reranking:
+            return "pgvector-bq"
+        else:
+            return "pgvector"
+    
+    # For any unknown index type, return it as-is preserving original case
+    return str(index_type)
+
 
 def extract_db_label_from_path(path):
-    """Extract db-label from path."""
+
+    # Looks for pattern: {database-type}/{index-type}/{db-label}/{provider}/
     parts = Path(path).parts
     
-    # Look for the db-label directory (3 levels deep from results/)
-    # Pattern: results/pgvector/hnsw/[db-label]/local/...
-    for i, part in enumerate(parts):
-        if part == 'results' and i + 3 < len(parts):
-            return parts[i + 3]
+    # Known database types and index types that come before db-label
+    db_types = ['pgvector', 'pgdiskann', 'pgvectorscale']
+    index_types = ['hnsw', 'hnsw-bq', 'diskann', 'ivfflat']
     
+    # Known provider types that come after db-label
+    provider_types = ['local', 'azure', 'azure-vm', 'aws', 'gcp']
+    
+    # Scan through path to find the pattern
+    for i in range(len(parts) - 3):  # Need at least 3 parts after current position
+        current_part = parts[i].lower()
+        
+        # Check if current part is a database type
+        if current_part in db_types:
+            # Check if next part is an index type
+            if i + 1 < len(parts) and parts[i + 1].lower() in index_types:
+                # The part after index type should be the db-label
+                if i + 2 < len(parts):
+                    potential_db_label = parts[i + 2]
+                    
+                    # Verify it's not a provider type (sanity check)
+                    if potential_db_label.lower() not in provider_types:
+                        return potential_db_label
+    
+    # Fallback: If pattern not found, return "unknown"
     return "unknown"
 
-def extract_test_parameters_from_log(log_path):
-    """
-    Extract test parameters from log.txt to match against config.json cases.
-    Returns dict with parameters found in the log file.
-    """
-    params = {}
-    
-    # Check if log.txt exists
-    log_file = os.path.join(os.path.dirname(log_path), 'log.txt')
-    if not os.path.exists(log_file):
-        return params
-    
-    try:
-        with open(log_file, 'r') as f:
-            content = f.read()
-        
-        # Extract parameters that might differ between cases
-        param_patterns = {
-            'm': r'm:\s*(\d+)',
-            'ef-construction': r'ef-construction:\s*(\d+)',
-            'maintenance-work-mem': r'maintenance-work-mem:\s*(\S+)',
-            'max-parallel-workers': r'max-parallel-workers:\s*(\d+)',
-            'quantization-type': r'quantization-type:\s*(\S+)',
-            'reranking': r'reranking:\s*(\S+)',
-        }
-        
-        for param_name, pattern in param_patterns.items():
-            match = re.search(pattern, content, re.IGNORECASE)
-            if match:
-                params[param_name] = match.group(1)
-        
-        return params
-    
-    except Exception as e:
-        print(f"Warning: Could not read log.txt: {e}")
-        return params
 
-def match_case_from_config(config_path, test_params, summaries):
+def get_processing_directory(results_base_dir, subfolder_preference):
     """
-    Match the current test result to the correct case in config.json.
-    Uses multiple parameters to find the best match.
-    
-    Args:
-        config_path: Path to config.json
-        test_params: Parameters extracted from log.txt
-        summaries: Summary data from hdbxtprofile.log (contains VU counts)
-    
-    Returns:
-        The matched case dict, or None if no match found
+    Determine which directory to process based on subfolder preference.
+        results_base_dir: Base results directory (e.g., "results")
+        subfolder_preference: "latest", "archive", or None
     """
+
+    # Check if archive and latest folders exist
+    latest_path = os.path.join(results_base_dir, 'latest')
+    archive_path = os.path.join(results_base_dir, 'archive')
+    
+    has_latest = os.path.isdir(latest_path)
+    has_archive = os.path.isdir(archive_path)
+    
+    # If subfolder preference is specified
+    if subfolder_preference == "latest" and has_latest:
+        return latest_path, "latest"
+    
+    if subfolder_preference == "archive" and has_archive:
+        return archive_path, "archive"
+    
+    # If subfolder preference is specified but doesn't exist
+    if subfolder_preference in ["latest", "archive"]:
+        if not has_latest and not has_archive:
+            print(f"ℹNote: Neither 'latest' nor 'archive' subfolders found.")
+            print(f"         Processing entire '{results_base_dir}' directory.")
+            return results_base_dir, None
+        else:
+            print(f"Warning: '{subfolder_preference}' subfolder not found.")
+            if subfolder_preference == "latest" and has_archive:
+                print(f"           'archive' subfolder is available. Consider using SUBFOLDER='archive'")
+            elif subfolder_preference == "archive" and has_latest:
+                print(f"           'latest' subfolder is available. Consider using SUBFOLDER='latest'")
+            return results_base_dir, None
+    
+    # Default: process entire results directory
+    return results_base_dir, None
+
+
+def find_result_json(directory):
+
+    # Search patterns in order of preference
+    search_patterns = [
+        os.path.join(directory, 'PgVector', 'result_*_pgvector.json'),
+        os.path.join(directory, 'PgDiskANN', 'result_*_pgdiskann.json'),
+        os.path.join(directory, 'result_*_pgvector.json'),
+        os.path.join(directory, 'result_*_pgdiskann.json'),
+        os.path.join(directory, 'result_*.json'),
+    ]
+    
+    for pattern in search_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            return matches[0]  # Return first match
+    
+    return None
+
+
+def is_result_folder(directory, files):
+
+    # Check if directory contains test-related files (not just result JSON)
+    test_indicators = {
+        'hdbxtprofile.log',
+        'config.json',
+        'out.log',
+        'tpccv_results.log',
+        'log.txt'
+    }
+    
+    # If directory has any test indicator files, it's a result folder
+    has_test_files = any(f in files for f in test_indicators)
+    
+    # Also check if this is NOT a known subdirectory
+    dirname = os.path.basename(directory)
+    is_subdirectory = dirname in ['PgVector', 'PgDiskANN', 'PgVectorScale']
+    
+    return has_test_files and not is_subdirectory
+
+
+def extract_index_from_result_json(json_path):
+
     try:
-        with open(config_path, 'r') as f:
-            config = json.load(f)
+        with open(json_path, 'r') as f:
+            data = json.load(f)
         
-        cases = config.get('cases', [])
+        # Navigate to db_case_config
+        results = data.get('results', [])
+        if not results:
+            return "unknown", False, "No 'results' array found in JSON"
         
-        if len(cases) == 1:
-            # Only one case, return it
-            return cases[0]
+        task_config = results[0].get('task_config', {})
+        if not task_config:
+            return "unknown", False, "No 'task_config' found in JSON"
         
-        # Try to match based on multiple parameters
-        best_match = None
-        best_score = 0
+        db_case_config = task_config.get('db_case_config', {})
+        if not db_case_config:
+            return "unknown", False, "No 'db_case_config' found in JSON"
         
-        for case in cases:
-            score = 0
-            
-            # Match based on index parameters
-            if test_params.get('m') == str(case.get('m')):
-                score += 3
-            if test_params.get('ef-construction') == str(case.get('ef-construction')):
-                score += 3
-            if test_params.get('maintenance-work-mem') == case.get('maintenance-work-mem'):
-                score += 2
-            if test_params.get('max-parallel-workers') == str(case.get('max-parallel-workers')):
-                score += 2
-            if test_params.get('quantization-type') == case.get('quantization-type'):
-                score += 2
-            if test_params.get('reranking') == case.get('reranking'):
-                score += 1
-            
-            # Try to match based on VU configuration
-            # Check if any summary matches the configured mw_oltp_vu and mw_vector_vu
-            for summary in summaries:
-                if (summary['oltp_vu'] == int(case.get('mw_oltp_vu', 0)) and 
-                    summary['vector_vu'] == int(case.get('mw_vector_vu', 0))):
-                    score += 5  # Strong match on VU configuration
-                    break
-            
-            if score > best_score:
-                best_score = score
-                best_match = case
+        # Extract relevant fields
+        index_type = db_case_config.get('index', 'hnsw')
+        quantization_type = db_case_config.get('quantization_type')
+        reranking = db_case_config.get('reranking', False)
         
-        # If we found a reasonable match (score > 0), return it
-        if best_score > 0:
-            return best_match
+        # Map to extension
+        extension = extract_index_to_extension(index_type, quantization_type, reranking)
         
-        # Fallback: return first case
-        return cases[0] if cases else None
+        return extension, True, None
     
+    except FileNotFoundError:
+        return "unknown", False, f"File not found: {json_path}"
+    except json.JSONDecodeError as e:
+        return "unknown", False, f"Invalid JSON format: {str(e)}"
+    except KeyError as e:
+        return "unknown", False, f"Missing key in JSON: {str(e)}"
     except Exception as e:
-        print(f"Error matching case from config: {e}")
-        return None
+        return "unknown", False, f"Unexpected error: {str(e)}"
+
 
 def extract_all_summaries_from_hdbxtprofile(file_path):
-    """
-    Extract ALL summary sections from hdbxtprofile.log.
-    Returns a list of dictionaries, one for each SUMMARY section.
-    """
+
     try:
         with open(file_path, 'r') as f:
             content = f.read()
         
-        # Find ALL SUMMARY sections using finditer 
+        # Find ALL SUMMARY sections using finditer
         summary_pattern = re.compile(
             r'>>>>> SUMMARY OF (\d+) ACTIVE VIRTUAL USERS.*?'
             r'TOTAL VECTOR QPS:\s*([\d.]+).*?'
@@ -223,22 +264,21 @@ def extract_all_summaries_from_hdbxtprofile(file_path):
             # Get the position of this summary in the file
             summary_start = match.start()
             
-            # Count how many VIRTUAL USER sections have SEMANTIC_SEARCH before this summary
+            # Pattern for SEMANTIC_SEARCH sections
             vector_vu_pattern = r'>>>>> VIRTUAL USER \d+ :.*?>>>>> PROC: SEMANTIC_SEARCH'
             
-            # We need to count only the ones in the CURRENT test section
-            # Find the previous summary's position
+            # Find previous summary's position to isolate current section
             previous_summaries = list(summary_pattern.finditer(content[:summary_start]))
             
             if previous_summaries:
-                # Get content between previous summary and current summary
+                # Get content between previous and current summary
                 previous_summary_end = previous_summaries[-1].end()
                 current_section = content[previous_summary_end:summary_start]
             else:
                 # This is the first summary, get content from start
                 current_section = content[:summary_start]
             
-            # Count SEMANTIC_SEARCH in current section
+            # Count SEMANTIC_SEARCH in current section only
             vector_vu_matches = re.findall(vector_vu_pattern, current_section, re.DOTALL)
             vector_vu = len(vector_vu_matches)
             
@@ -253,91 +293,123 @@ def extract_all_summaries_from_hdbxtprofile(file_path):
             })
         
         if not summaries:
-            print(f"Warning: No SUMMARY sections found in {file_path}")
-            return None
+            return None, False, "No SUMMARY sections found in file"
         
-        return summaries
+        return summaries, True, None
     
     except FileNotFoundError:
-        print(f"Error: File not found - {file_path}")
-        return None
+        return None, False, f"File not found: {file_path}"
     except Exception as e:
-        print(f"Error reading {file_path}: {e}")
-        return None
+        return None, False, f"Error reading file: {str(e)}"
+
 
 def extract_run_count_from_dirname(dirname):
-    """Extract run count from directory name."""
+
     # Pattern: ...-{run_count}-{random_number}
     match = re.search(r'-(\d+)-\d+$', dirname)
     if match:
-        return int(match.group(1))
-    return 0
+        return int(match.group(1)), True
+    return 0, False
 
-def process_results_directory(results_dir):
-    """
-    Walk through results directory and extract data.
-    Returns dict grouped by db-label: {db_label: [rows]}
-    """
+
+def process_results_directory(results_dir, subfolder_info=None):
+
     data_by_label = defaultdict(list)
     processed_count = 0
-    error_count = 0
+    skipped_count = 0
+    error_details = []
     
-    print(f"\nScanning directory: {results_dir}")
-    print("=" * 60)
+    if subfolder_info:
+        print(f"\nScanning directory: {results_dir} ({subfolder_info} subfolder)")
+    else:
+        print(f"\nScanning directory: {results_dir}")
+    print("=" * 90)
     
     for root, dirs, files in os.walk(results_dir):
-        # Check if this directory contains result files
-        if 'hdbxtprofile.log' in files and 'config.json' in files:
-            hdbxtprofile_path = os.path.join(root, 'hdbxtprofile.log')
-            config_path = os.path.join(root, 'config.json')
+        dirname = os.path.basename(root)
+        
+        # Skip if this is not a test result folder 
+        if not is_result_folder(root, files):
+            continue
+        
+        # Check for BOTH required files
+        has_hdbxtprofile = 'hdbxtprofile.log' in files
+        has_result_json = find_result_json(root) is not None
+        
+        # Skip if missing either file 
+        if not has_hdbxtprofile:
+            skipped_count += 1
+            error_details.append(f"{dirname:60s} → Missing hdbxtprofile.log")
+            continue
+        
+        if not has_result_json:
+            skipped_count += 1
+            error_details.append(f"{dirname:60s} → Missing result_*.json file")
+            continue
+        
+        # Both files present, proceed with extraction
+        hdbxtprofile_path = os.path.join(root, 'hdbxtprofile.log')
+        result_json_path = find_result_json(root)
+        
+        # Extract db-label from path
+        db_label = extract_db_label_from_path(root)
+        if db_label == "unknown":
+            skipped_count += 1
+            error_details.append(f"{dirname:60s} → Could not extract db-label from path")
+            continue
+        
+        # Extract summaries from hdbxtprofile.log
+        summaries, sum_success, sum_error = extract_all_summaries_from_hdbxtprofile(hdbxtprofile_path)
+        if not sum_success:
+            skipped_count += 1
+            error_details.append(f"{dirname:60s} → {sum_error}")
+            continue
+        
+        # Extract index type from result JSON
+        extension, ext_success, ext_error = extract_index_from_result_json(result_json_path)
+        if not ext_success:
+            skipped_count += 1
+            error_details.append(f"{dirname:60s} → {ext_error}")
+            continue
+        
+        # Extract run count from directory name
+        run_count, run_success = extract_run_count_from_dirname(dirname)
+        if not run_success:
+            error_details.append(f"{dirname:60s} → Run count not found (using 0)")
+        
+        # Create one row for EACH summary (each num-concurrency level)
+        for idx, summary in enumerate(summaries):
+            row = {
+                'OLTP VU': summary['oltp_vu'],
+                'Vector VU': summary['vector_vu'],
+                'NOPM': summary['nopm'],
+                'QPS': summary['qps'],
+                'Run Count': run_count,
+                'Extension': extension,
+                'Concurrency Index': idx
+            }
             
-            # Extract db-label from path
-            db_label = extract_db_label_from_path(root)
-            
-            # Extract ALL summaries (one per num-concurrency)
-            summaries = extract_all_summaries_from_hdbxtprofile(hdbxtprofile_path)
-            if not summaries:
-                error_count += 1
-                continue
-            
-            # Extract test parameters from log.txt
-            test_params = extract_test_parameters_from_log(hdbxtprofile_path)
-            
-            # Match to the correct case in config.json
-            matched_case = match_case_from_config(config_path, test_params, summaries)
-            
-            if matched_case:
-                vindex = matched_case.get('vindex', 'unknown')
-                extension = extract_vindex_to_extension(vindex)
-            else:
-                extension = "unknown"
-            
-            run_count = extract_run_count_from_dirname(os.path.basename(root))
-            
-            # Create one row for EACH summary (each num-concurrency)
-            for idx, summary in enumerate(summaries):
-                row = {
-                    'OLTP VU': summary['oltp_vu'],
-                    'Vector VU': summary['vector_vu'],
-                    'NOPM': summary['nopm'],
-                    'QPS': summary['qps'],
-                    'Run Count': run_count,
-                    'Extension': extension,
-                    'Concurrency Index': idx  # To track which num-concurrency this is
-                }
-                
-                data_by_label[db_label].append(row)
-            
-            processed_count += 1
-            print(f"Processed: {os.path.basename(root)} → {db_label} ({len(summaries)} summaries) → {extension}")
+            data_by_label[db_label].append(row)
+        
+        processed_count += 1
+        print(f"{dirname:60s} → {extension:15s} ({len(summaries)} summaries)")
     
-    print("=" * 60)
-    print(f"Summary: {processed_count} folders processed, {error_count} errors")
+    print("=" * 90)
+    print(f"Summary: {processed_count} folders processed, {skipped_count} folders skipped")
+    
+    # Print error details if any
+    if error_details:
+        print(f"\nSkipped Folders Details:")
+        print("-" * 90)
+        for error in error_details:
+            print(error)
+        print("-" * 90)
     
     return data_by_label
 
+
 def write_to_csv(data, output_file):
-    """Write data to CSV file."""
+
     if not data:
         print(f"No data to write for {output_file}")
         return
@@ -355,36 +427,61 @@ def write_to_csv(data, output_file):
     except Exception as e:
         print(f"Error writing CSV {output_file}: {e}")
 
+
 def main():
+    
+    # ==================== CONFIGURATION ====================
+    
     results_base_dir = "results"
     
-    # Set COMBINE_ALL to True to combine all db-labels into one CSV file
-    # Set to False to create separate CSV files for each db-label (DEFAULT)
-    COMBINE_ALL = False  # ← Change this to True to combine all results
+    # Set COMBINE_ALL to True to combine all db-labels into one CSV file (DEFAULT)
+    # Set to False to create separate CSV files for each db-label 
+    COMBINE_ALL = True
+    
+    # Set SUBFOLDER to process specific subdirectories:
+    # - None: Process entire results directory (DEFAULT)
+    # - "latest": Process only results/latest/ subdirectory
+    # - "archive": Process only results/archive/ subdirectory
+    SUBFOLDER = None  # ← Change to "latest" or "archive" if needed
+    
+    # =======================================================
+    
+    # Check if results directory exists
+    if not os.path.exists(results_base_dir):
+        print(f"\nError: Results directory '{results_base_dir}' not found!")
+        print(f"   Please ensure you're running this script from the correct location.")
+        return
+    
+    # Determine which directory to process
+    processing_dir, subfolder_info = get_processing_directory(results_base_dir, SUBFOLDER)
     
     # Process directories grouped by db-label
-    data_by_label = process_results_directory(results_base_dir)
+    data_by_label = process_results_directory(processing_dir, subfolder_info)
     
     if not data_by_label:
-        print("\nNo data found to process!")
+        print("\nNo valid data found to process!")
+        print("   Please check that your result folders contain both:")
+        print("   1. hdbxtprofile.log")
+        print("   2. result_*.json file")
         return
     
     print(f"\nFound {len(data_by_label)} db-label(s):")
     for label, rows in data_by_label.items():
-        print(f"   • {label} ({len(rows)} results)")
+        extensions = set(row['Extension'] for row in rows)
+        print(f"   • {label} ({len(rows)} results, extensions: {', '.join(sorted(extensions))})")
     
     if COMBINE_ALL:
         # Combine all data into one CSV
         print("\nCombining all results into one file...")
         all_data = []
-        for db_label, rows in data_by_label.items():
+        for rows in data_by_label.values():
             all_data.extend(rows)
         
         # Sort combined data
         all_data.sort(key=lambda x: (
-            x['Extension'], 
-            x['OLTP VU'], 
-            x['Vector VU'], 
+            x['Extension'],
+            x['OLTP VU'],
+            x['Vector VU'],
             x['Run Count'],
             x.get('Concurrency Index', 0)
         ))
@@ -398,9 +495,9 @@ def main():
         for db_label, rows in data_by_label.items():
             # Sort data for this db-label
             rows.sort(key=lambda x: (
-                x['Extension'], 
-                x['OLTP VU'], 
-                x['Vector VU'], 
+                x['Extension'],
+                x['OLTP VU'],
+                x['Vector VU'],
                 x['Run Count'],
                 x.get('Concurrency Index', 0)
             ))
@@ -410,6 +507,7 @@ def main():
             write_to_csv(rows, output_csv)
     
     print("\nProcessing complete!")
+
 
 if __name__ == "__main__":
     main()
