@@ -2849,6 +2849,13 @@ proc loadtimedpgtpcc { } {
     upvar #0 vectordbdict vectordbdict
     upvar #0 dbdict dbdict
 
+    # Initialize mixed_workload if it doesn't exist
+    if {![dict exists $vectordbdict mixed_workload]} {
+        dict set vectordbdict mixed_workload mw_vu 0.6
+        dict set vectordbdict mixed_workload vector_table_name "vdbbench_table_test"
+        puts "DEBUG: Initialized mixed_workload with default values"
+    }
+
     if {[dict exists $vectordbdict $vindex]} {
         set index_params [dict create]
         set search_params [dict create]
@@ -2877,8 +2884,18 @@ proc loadtimedpgtpcc { } {
     } else {
         error "Index configuration for $vindex not found in vectordbdict"
     }
-    set mw_oltp_vu [dict get $vectordbdict mixed_workload mw_oltp_vu]
-    set mw_vector_vu [dict get $vectordbdict mixed_workload mw_vector_vu]
+
+    # Read mw_vu percentage from vectordbdict
+    puts "DEBUG pgoltp.tcl: Checking if mw_vu exists in vectordbdict"
+    if {[dict exists $vectordbdict mixed_workload mw_vu]} {
+        set mw_vu_percentage [dict get $vectordbdict mixed_workload mw_vu]
+        puts "DEBUG pgoltp.tcl: Found mw_vu in vectordbdict: $mw_vu_percentage"
+    } else {
+        set mw_vu_percentage 0.6
+        puts "DEBUG pgoltp.tcl: mw_vu NOT found in vectordbdict, using default: 0.6"
+    }
+    puts "DEBUG pgoltp.tcl: Final mw_vu_percentage value: $mw_vu_percentage"
+
     set vector_table_name [dict get $vectordbdict mixed_workload vector_table_name]
 
     if {[dict exists $dbdict postgresql library ]} {
@@ -2901,9 +2918,8 @@ set session_params {$session_params} ;# Vector DB Dictionary
 set index_params {$index_params} ;# Vector DB Dictionary
 set index_creation_with_options {$index_creation_with_options} ;# Vector DB Dictionary
 set bq_params {$bq_params} ;# Vector DB Dictionary
-set mw_oltp_vu $mw_oltp_vu ;# Mixed Workload VUs Ratio
-set mw_vector_vu $mw_vector_vu ;# Mixed Workload VUs Ratio
-set vector_table_name $vector_table_name ;# Vector table name used in VDBBench
+set mw_vu $mw_vu_percentage ;# Only embed percentage
+set vector_table_name \"$vector_table_name\" ;# Vector table name used in VDBBench
 set total_iterations $pg_total_iterations ;# Number of transactions before logging off
 set RAISEERROR \"$pg_raiseerror\" ;# Exit script on PostgreSQL (true or false)
 set KEYANDTHINK \"$pg_keyandthink\" ;# Time for user thinking and keying (true or false)
@@ -2960,6 +2976,33 @@ proc CheckDBVersion { lda1 } {
         }
 
 set rema [ lassign [ findvuposition ] myposition totalvirtualusers ]
+
+puts "DEBUG RUNTIME: totalvirtualusers=$totalvirtualusers, mw_vu=$mw_vu"
+
+# Calculate thread split at RUNTIME based on actual totalvirtualusers
+set total_vu [expr {$totalvirtualusers - 1}]
+puts "DEBUG RUNTIME: total_vu (excluding monitor) = $total_vu"
+
+set mw_oltp_vu [expr {int($total_vu * $mw_vu)}]
+puts "DEBUG RUNTIME: Calculated mw_oltp_vu = int($total_vu * $mw_vu) = $mw_oltp_vu"
+
+set mw_vector_vu [expr {$total_vu - $mw_oltp_vu}]
+puts "DEBUG RUNTIME: Calculated mw_vector_vu = $total_vu - $mw_oltp_vu = $mw_vector_vu"
+
+# Validation: ensure at least 1 thread each
+if {$mw_oltp_vu < 1} {
+    set mw_oltp_vu 1
+    set mw_vector_vu [expr {$total_vu - 1}]
+    puts "Warning: Adjusted to minimum 1 OLTP thread (mw_vu too low)"
+}
+if {$mw_vector_vu < 1} {
+    set mw_vector_vu 1
+    set mw_oltp_vu [expr {$total_vu - 1}]
+    puts "Warning: Adjusted to minimum 1 Vector thread (mw_vu too high)"
+}
+
+puts "Thread allocation: $mw_oltp_vu OLTP + $mw_vector_vu Vector = $total_vu total (from $totalvirtualusers VUs, mw_vu=$mw_vu)"
+
 if {$myposition == 1} {
         ######MONITOR THREAD######
         if { $mode eq "Local" || $mode eq "Primary" } {
@@ -3652,8 +3695,35 @@ proc CheckDBVersion { lda1 } {
         }
 
 set rema [ lassign [ findvuposition ] myposition totalvirtualusers ]
+
+puts "DEBUG RUNTIME: totalvirtualusers=$totalvirtualusers, mw_vu=$mw_vu"
+
+# Calculate thread split at RUNTIME based on actual totalvirtualusers
+set total_vu [expr {$totalvirtualusers - 1}]
+puts "DEBUG RUNTIME: total_vu (excluding monitor) = $total_vu"
+
+set mw_oltp_vu [expr {int($total_vu * $mw_vu)}]
+puts "DEBUG RUNTIME: Calculated mw_oltp_vu = int($total_vu * $mw_vu) = $mw_oltp_vu"
+
+set mw_vector_vu [expr {$total_vu - $mw_oltp_vu}]
+puts "DEBUG RUNTIME: Calculated mw_vector_vu = $total_vu - $mw_oltp_vu = $mw_vector_vu"
+
+# Validation: ensure at least 1 thread each
+if {$mw_oltp_vu < 1} {
+    set mw_oltp_vu 1
+    set mw_vector_vu [expr {$total_vu - 1}]
+    puts "Warning: Adjusted to minimum 1 OLTP thread (mw_vu too low)"
+}
+if {$mw_vector_vu < 1} {
+    set mw_vector_vu 1
+    set mw_oltp_vu [expr {$total_vu - 1}]
+    puts "Warning: Adjusted to minimum 1 Vector thread (mw_vu too high)"
+}
+
+puts "Thread allocation: $mw_oltp_vu OLTP + $mw_vector_vu Vector = $total_vu total (from $totalvirtualusers VUs, mw_vu=$mw_vu)"
+
 switch $myposition {
-    1 { 
+    1 {
         if { $mode eq "Local" || $mode eq "Primary" } {
             if { ($DRITA_SNAPSHOTS eq "true") || ($VACUUM eq "true") } {
                 set lda [ ConnectToPostgres $host $port $sslmode $superuser $superuser_password $default_database ]
