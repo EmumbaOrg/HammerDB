@@ -7,6 +7,7 @@ import psycopg2
 from psycopg2 import sql
 import os
 import shutil
+from hammerdb import * 
 
 os.environ["LOG_LEVEL"] = "DEBUG"
 
@@ -111,6 +112,8 @@ def query_configurations(config):
 def get_stats(config):
     with open('queries.json', 'r') as file:
         queries = json.load(file)
+    
+    conn = None  
     try:
         conn = psycopg2.connect(
             dbname=config['db_name'],
@@ -132,11 +135,11 @@ def get_stats(config):
                     print(f"{' | '.join(map(str, row))}")
             except Exception as e:
                 print(f"Failed to run query: {e}")
-        conn.close()
     except Exception as e:
-        print(f"Setup failed: {e}")
+        print(f"Failed to connect or execute queries: {e}")
     finally:
-        conn.close()
+        if conn:  # Close if connection was established
+            conn.close()
 
 def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     dbset('db', hammerdb_config['db'])
@@ -223,9 +226,8 @@ def run_tpccv(vu, output_dir: str):
     # tcstop()
     print("TEST COMPLETE")
     file_path = os.path.join(output_dir, "tpccv_results.log")
-    fd = open(file_path, "w")
-    fd.write(jobid)
-    fd.close()
+    with open(file_path, "w") as fd:
+        fd.write(jobid)
 
 def calculate_recall(output_dir: str):
     vudestroy()
@@ -239,11 +241,9 @@ def calculate_recall(output_dir: str):
     vudestroy()
     # tcstop()
     print("TEST COMPLETE")
-    # TODO: Fix - logs are not being written to file
     file_path = os.path.join(output_dir, "tpccv_results.log")
-    fd = open(file_path, "w")
-    fd.write(jobid)
-    fd.close()
+    with open(file_path, "w") as fd:
+        fd.write(jobid)
 
 def copy_log_and_config(output_directories: list):
     for output_dir in output_directories:
@@ -281,9 +281,6 @@ def run_benchmark(
     # Handle initial flags (no skip for the first iteration)
     if case.get("drop_old", True):
         base_command.append("--drop-old")
-        if vindex in ['hnsw', 'hnsw_bq']:
-            #TODO: Drop old database, currently only table and index are being dropped
-            pass
     else:
         base_command.append("--skip-drop-old")
 
@@ -419,9 +416,9 @@ def run_benchmark(
                         f.flush()
                         print(f"Running HammerDB TPC-CV with {vu} VUs")
                         run_tpccv(vu, output_dir)
-                        # prints "Sleeping for 30 seconds"
-                        if vindex in ['hnsw', 'hnsw_bq']:
-                            print("Sleeping for 30 seconds")
+
+                        print("Sleeping for 30 seconds")
+
                         get_stats(db_config)
                         f.flush()
                         time.sleep(30)
@@ -431,11 +428,8 @@ def run_benchmark(
                     print("*************END*************")
             except subprocess.CalledProcessError as e:
                 print(f"Benchmark failed: {e}")
-            
-            if vindex in ['hnsw', 'hnsw_bq']:
-                print("Sleeping for 1 min")
-            elif vindex == 'pgdiskann':
-                print("Sleeping for 30 sec")
+
+            print("Sleeping for 1 minute")    
             time.sleep(60)
     
     return output_directories
@@ -445,13 +439,16 @@ def main():
     build_schema = True
     start_time = time.time()
     
+    # Setup database once for all cases
+    setup_database(config)
+
     for i, case in enumerate(config['cases']):
         if i > 0:
             build_schema = False
         # BYPASS schema builds
         build_schema = True
+
         print(f"Running case: {case['db-label']}")
-        setup_database(config)
         output_directories = run_benchmark(case, config['database'], config['hammerdb'], build_schema)
         copy_log_and_config(output_directories)
         teardown_database(config)
