@@ -451,8 +451,9 @@ def main():
         print(f"Running case: {case['db-label']}")
         output_directories = run_benchmark(case, config['database'], config['hammerdb'], build_schema)
         copy_log_and_config(output_directories)
-        teardown_database(config)
         time.sleep(120)
+    
+    teardown_database(config)
     
     end_time = time.time()
     execution_time = end_time - start_time
