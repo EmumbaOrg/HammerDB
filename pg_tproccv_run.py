@@ -1,4 +1,3 @@
-#pg_tproccv_run.py
 import json
 import time
 from contextlib import redirect_stdout
