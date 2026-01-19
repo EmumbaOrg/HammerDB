@@ -1,3 +1,4 @@
+#pg_tproccv_run.py
 import json
 import time
 from contextlib import redirect_stdout
@@ -8,6 +9,8 @@ from psycopg2 import sql
 import os
 import shutil
 from hammerdb import * 
+import threading
+from datetime import datetime
 
 os.environ["LOG_LEVEL"] = "DEBUG"
 
@@ -141,6 +144,103 @@ def get_stats(config):
         if conn:  # Close if connection was established
             conn.close()
 
+def get_query_by_description(description: str):
+
+    # Load a specific query from queries.json by its description
+
+    try:
+        with open('queries.json', 'r') as file:
+            queries = json.load(file)
+        
+        for item in queries:
+            if item['description'] == description:
+                return item['query']
+        
+        print(f"Warning: Query with description '{description}' not found in queries.json")
+        return None
+    except Exception as e:
+        print(f"Failed to load query from queries.json: {e}")
+        return None
+
+
+def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int, stop_event: threading.Event):
+    
+    # Continuously monitor pg_buffercache and write to a separate log file.
+    
+    log_file_path = os.path.join(output_dir, "buffercache_monitoring.log")
+    
+    # Load the query from queries.json (same query used by get_stats)
+    buffercache_query = get_query_by_description("Buffer Usage from pg_buffercache")
+    
+    if buffercache_query is None:
+        print("ERROR: Could not load buffer cache query from queries.json")
+        return
+    
+    conn = None
+    try:
+        conn = psycopg2.connect(
+            dbname=db_config['db_name'],
+            user=db_config['username'],
+            password=db_config['password'],
+            host=db_config['host']
+        )
+        
+        with open(log_file_path, 'w') as log_file:
+            # Write header
+            log_file.write("=" * 80 + "\n")
+            log_file.write("PostgreSQL Buffer Cache Continuous Monitoring\n")
+            log_file.write("=" * 80 + "\n")
+            log_file.write(f"Monitoring Interval: {interval_seconds} seconds\n")
+            log_file.write(f"Database: {db_config['db_name']}\n")
+            log_file.write(f"Host: {db_config['host']}\n")
+            log_file.write(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            log_file.write("=" * 80 + "\n\n")
+            log_file.flush()
+            
+            while not stop_event.is_set():
+                try:
+                    cur = conn.cursor()
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    
+                    # Execute buffercache query from queries.json
+                    cur.execute(buffercache_query)
+                    result = cur.fetchone()
+                    
+                    if result:
+                        # Parse result based on query structure
+                        # Query returns: used, empty, total, percent
+                        used, empty, total, percent = result
+                        log_file.write(f"[{timestamp}] used={used} | empty={empty} | total={total} | percent={percent}%\n")
+                        log_file.flush()
+                    
+                    cur.close()
+                    
+                except Exception as e:
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    log_file.write(f"[{timestamp}] ERROR: {str(e)}\n")
+                    log_file.flush()
+                
+                # Wait for the interval or until stop_event is set
+                stop_event.wait(timeout=interval_seconds)
+            
+            # Write footer when monitoring stops
+            log_file.write("\n" + "=" * 80 + "\n")
+            log_file.write(f"Monitoring stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            log_file.write("=" * 80 + "\n")
+            log_file.flush()
+            
+    except Exception as e:
+        error_msg = f"Failed to start buffer cache monitoring: {e}\n"
+        print(error_msg)
+        try:
+            with open(log_file_path, 'a') as log_file:
+                log_file.write(error_msg)
+        except:
+            pass
+    finally:
+        if conn:
+            conn.close()
+
 def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     dbset('db', hammerdb_config['db'])
     dbset('bm', hammerdb_config['bm'])
@@ -256,7 +356,7 @@ def copy_log_and_config(output_directories: list):
             print(f"Failed to copy out.log to {output_dir}: {e}")
 
 def run_benchmark(
-    case: dict, db_config: dict, hammerdb_config: dict, build_schema: bool
+    case: dict, db_config: dict, hammerdb_config: dict, build_schema: bool, monitoring_config: dict
 ):
     vindex = case['vindex']
     
@@ -403,12 +503,27 @@ def run_benchmark(
                         drop_tpcc_schema(db_config)
                         buildschema()
                         vudestroy()
+
+                    # Start buffer cache monitoring
+                    monitoring_thread = None
+                    stop_monitoring = threading.Event()
                     
+                    if monitoring_config.get('enabled', False):
+                        interval = monitoring_config.get('interval_seconds', 10)
+                        monitoring_thread = threading.Thread(
+                            target=monitor_buffercache,
+                            args=(db_config, output_dir, interval, stop_monitoring),
+                            daemon=True,
+                            name=f"BufferCacheMonitor-{case['db-label']}"
+                        )
+                        monitoring_thread.start()
+                        print(f"Started buffer cache monitoring (interval: {interval}s)")
+
                     for idx, vu in enumerate(case["num-concurrency"]):
                         
                         if idx == 0:
                             # TODO: Remove 
-                            diset('tpcc', 'pg_rampup', "10")
+                            diset('tpcc', 'pg_rampup', "2")
                         else:
                             diset('tpcc', 'pg_rampup', hammerdb_config['pg_rampup'])
                         
@@ -426,8 +541,25 @@ def run_benchmark(
                     print("*************CALCULATING RECALL*************")
                     # calculate_recall(output_dir)
                     print("*************END*************")
+
+                # Stop buffer cache monitoring if it's running
+                if monitoring_thread is not None and monitoring_thread.is_alive():
+                    print(f"Stopping buffer cache monitoring for {output_dir}")
+                    stop_monitoring.set()
+                    monitoring_thread.join(timeout=5)
+                    if monitoring_thread.is_alive():
+                        print(f"Warning: Monitoring thread did not stop gracefully")
+                    else:
+                        print(f"Buffer cache monitoring stopped successfully")
+
             except subprocess.CalledProcessError as e:
                 print(f"Benchmark failed: {e}")
+
+                # Stop monitoring on error as well
+                if monitoring_thread is not None and monitoring_thread.is_alive():
+                    print(f"Stopping buffer cache monitoring due to error")
+                    stop_monitoring.set()
+                    monitoring_thread.join(timeout=5)
 
             print("Sleeping for 1 minute")    
             time.sleep(60)
@@ -441,6 +573,12 @@ def main():
     
     # Setup database once for all cases
     setup_database(config)
+    
+    # Get monitoring configuration (default to disabled if not present)
+    monitoring_config = config.get('buffercache_monitoring', {'enabled': False, 'interval_seconds': 10})
+    print(f"Buffer cache monitoring: {'ENABLED' if monitoring_config.get('enabled') else 'DISABLED'}")
+    if monitoring_config.get('enabled'):
+        print(f"Monitoring interval: {monitoring_config.get('interval_seconds')} seconds")
 
     for i, case in enumerate(config['cases']):
         if i > 0:
@@ -449,12 +587,12 @@ def main():
         build_schema = True
 
         print(f"Running case: {case['db-label']}")
-        output_directories = run_benchmark(case, config['database'], config['hammerdb'], build_schema)
+        output_directories = run_benchmark(case, config['database'], config['hammerdb'], build_schema, monitoring_config)
         copy_log_and_config(output_directories)
         time.sleep(120)
     
     teardown_database(config)
-    
+
     end_time = time.time()
     execution_time = end_time - start_time
     print(f"COMPLETED ALL EXECUTIONS. total_duration={execution_time}")

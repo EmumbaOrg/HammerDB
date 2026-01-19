@@ -23,11 +23,15 @@
     "pg_vacuum": "false",
     "keepalive_margin": "110"
   },
+  "buffercache_monitoring": {
+    "enabled": true,
+    "interval_seconds": 5
+  },
   "cases": [
     {
       "db-label": "hnsw-bq-mixed-test-13vu-oltp-200wh",  
       "vindex": "hnsw_bq",
-      "vector_table_name": "public.pg_vector_collection",
+      "vector_table_name": "public.vdbbench_table_test",
       "drop_old": true,
       "load": true,
       "search-serial": false,
@@ -53,7 +57,7 @@
     {
       "db-label": "hnsw-mixed-test-13vu-oltp-200wh",  
       "vindex": "hnsw",
-      "vector_table_name": "public.pg_vector_collection",
+      "vector_table_name": "public.vdbbench_table_test",
       "drop_old": true,
       "load": true,
       "search-serial": false,
