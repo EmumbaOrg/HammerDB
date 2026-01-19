@@ -522,7 +522,7 @@ def run_benchmark(
                         
                         if idx == 0:
                             # TODO: Remove 
-                            diset('tpcc', 'pg_rampup', "2")
+                            diset('tpcc', 'pg_rampup', "10")
                         else:
                             diset('tpcc', 'pg_rampup', hammerdb_config['pg_rampup'])
                         
