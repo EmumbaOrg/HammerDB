@@ -2,78 +2,59 @@
   "database": {
     "host": "localhost",
     "username": "postgres",
-    "password": "postgres",
+    "password": "password",
     "db_name": "ann",
-    "instance_type": "Standard_D8ds_v5",
-    "provider": "azure",
+    "instance_type": "local-laptop",
+    "provider": "local",
     "enable_seqscan": "off"
   },
   "hammerdb": {
     "db": "pg",
     "bm": "TPC-C",
-    "build_schema": false,
+    "build_schema": true,
     "pg_driver": "timed",
     "pg_total_iterations": "10000000",
-    "pg_count_ware": "200",
-    "pg_num_vu": "8",
-    "pg_rampup": "2",
-    "pg_duration": "5",
+    "pg_count_ware": "5",
+    "pg_num_vu": "3",
+    "pg_rampup": "0",
+    "pg_duration": "2",
     "pg_allwarehouse": "false",
     "pg_timeprofile": "true",
     "pg_vacuum": "false",
-    "keepalive_margin": "110"
+    "keepalive_margin": "90"
   },
-  "buffercache_monitoring": {
-    "enabled": true,
-    "interval_seconds": 5
+  "monitoring": {
+    "cache": {
+      "enabled": true,
+      "interval_seconds": 5
+    }
   },
   "cases": [
     {
-      "db-label": "hnsw-bq-mixed-test-13vu-oltp-200wh",  
+      "db-label": "hnsw-bq-mixed-test-buffercache-debugging-time",  
       "vindex": "hnsw_bq",
       "vector_table_name": "public.vdbbench_table_test",
       "drop_old": true,
       "load": true,
       "search-serial": false,
       "search-concurrent": false,
-      "case-type": "Performance1536D500K",
+      "case-type": "Performance1536D50K",
       "maintenance-work-mem": "8GB",
       "max-parallel-workers": 7,
-      "ef-search": [200],
+      "ef-search": [128],
       "ef-construction": 64,
       "m": 16,
       "quantization-type": "bit",
       "reranking": "true",
-      "quantized-fetch-limit": 200,
+      "quantized-fetch-limit": 128,
       "dim": 1536,
       "rerank-distance-op": "hamming",
-      "num-concurrency": ["13", "16", "19", "22", "25", "28", "31", "34", "37", "40", "43"],
+      "num-concurrency": ["20", "26"],
+      "mw_vector_vu": "8",
+      "mw_oltp_vu": "12",
       "concurrency-duration": 30,
       "k": 10,
-      "mw_vector_vu": "3",
-      "mw_oltp_vu": "13",
-      "run_count": 3
-    },
-    {
-      "db-label": "hnsw-mixed-test-13vu-oltp-200wh",  
-      "vindex": "hnsw",
-      "vector_table_name": "public.vdbbench_table_test",
-      "drop_old": true,
-      "load": true,
-      "search-serial": false,
-      "search-concurrent": false,
-      "case-type": "Performance1536D500K",
-      "maintenance-work-mem": "8GB",
-      "max-parallel-workers": 7,
-      "ef-search": [40],
-      "ef-construction": 128,
-      "m": 32,
-      "num-concurrency": ["13", "16", "19", "22", "25", "28", "31", "34", "37", "40", "43"],
-      "concurrency-duration": 30,
-      "k": 10,
-      "mw_vector_vu": "3",
-      "mw_oltp_vu": "13",
-      "run_count": 3
+      "run_count": 1
     }
   ]
 }

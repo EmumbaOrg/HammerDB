@@ -112,10 +112,13 @@ def query_configurations(config):
 
 
 def get_stats(config):
+    start_ts = datetime.now()
+    print(f"[get_stats] START at {start_ts.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
+
     with open('queries.json', 'r') as file:
         queries = json.load(file)
     
-    conn = None  
+    conn = None
     try:
         conn = psycopg2.connect(
             dbname=config['db_name'],
@@ -124,24 +127,37 @@ def get_stats(config):
             host=config['host']
         )
         cur = conn.cursor()
+
         for item in queries:
             query = item['query']
             description = item['description']
-            print(f"\nRunning query: {description}")
+            print(f"\n[get_stats] Running query: {description}")
+
             try:
                 cur.execute(query)
                 rows = cur.fetchall()
                 headers = [desc[0] for desc in cur.description]
+
                 print(f"{' | '.join(headers)}")
                 for row in rows:
                     print(f"{' | '.join(map(str, row))}")
+
             except Exception as e:
-                print(f"Failed to run query: {e}")
+                print(f"[get_stats] Failed to run query '{description}': {e}")
+
     except Exception as e:
-        print(f"Failed to connect or execute queries: {e}")
+        print(f"[get_stats] Failed to connect or execute queries: {e}")
+
     finally:
-        if conn:  # Close if connection was established
+        if conn:
             conn.close()
+
+        end_ts = datetime.now()
+        duration = (end_ts - start_ts).total_seconds()
+
+        print(f"[get_stats] END at   {end_ts.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
+        print(f"[get_stats] DURATION = {duration:.2f} seconds")
+
 
 def get_query_by_description(description: str):
 
@@ -161,52 +177,50 @@ def get_query_by_description(description: str):
         print(f"Failed to load query from queries.json: {e}")
         return None
 
-
 def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int, stop_event: threading.Event):
+
+    # Continuously monitor pg_buffercache and write to a CSV file.
+
+    csv_file_path = os.path.join(output_dir, "cache_monitoring.csv")
     
-    # Continuously monitor pg_buffercache and write to a CSV file
-    
-    csv_file_path = os.path.join(output_dir, "buffercache_monitoring.csv")
-    
-    # Load the query from queries.json (same query used by get_stats)
+    # Load query from queries.json
     buffercache_query = get_query_by_description("Buffer Usage from pg_buffercache")
     
     if buffercache_query is None:
         print("ERROR: Could not load buffer cache query from queries.json")
         return
     
-    conn = None
     try:
-        conn = psycopg2.connect(
+        # Context managers ensure automatic cleanup of connection and file
+        # Resources are closed even if exceptions occur
+        with psycopg2.connect(
             dbname=db_config['db_name'],
             user=db_config['username'],
             password=db_config['password'],
             host=db_config['host']
-        )
-        
-        with open(csv_file_path, 'w') as csv_file:
-            # Write CSV header (column names only)
+        ) as conn, open(csv_file_path, 'w') as csv_file:
+            
+            # Write CSV header
             csv_file.write("timestamp,used,empty,total,percent\n")
             csv_file.flush()
             
+            # Main monitoring loop
             while not stop_event.is_set():
                 try:
-                    cur = conn.cursor()
-                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                    
-                    # Execute buffercache query from queries.json
-                    cur.execute(buffercache_query)
-                    result = cur.fetchone()
-                    
-                    if result:
-                        # Parse result: used, empty, total, percent
-                        used, empty, total, percent = result
-                        # Write CSV row (values only, comma-separated)
-                        csv_file.write(f"{timestamp},{used},{empty},{total},{percent}\n")
-                        csv_file.flush()
-                    
-                    cur.close()
-                    
+                    # Cursor context manager closes after each query
+                    with conn.cursor() as cur:
+                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                        # Execute buffercache query from queries.json
+                        cur.execute(buffercache_query)
+                        result = cur.fetchone()
+                        
+                        if result:
+                            # Parse result: used, empty, total, percent
+                            used, empty, total, percent = result
+                            # Write CSV row (values only, comma-separated)
+                            csv_file.write(f"{timestamp},{used},{empty},{total},{percent}\n")
+                            csv_file.flush()
+                
                 except Exception as e:
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                     # Write error as CSV row
@@ -215,13 +229,9 @@ def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int,
                 
                 # Wait for the interval or until stop_event is set
                 stop_event.wait(timeout=interval_seconds)
-            
+    
     except Exception as e:
-        error_msg = f"Failed to start buffer cache monitoring: {e}\n"
-        print(error_msg)
-    finally:
-        if conn:
-            conn.close()
+        print(f"Failed to start cache monitoring: {e}")
 
 def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     dbset('db', hammerdb_config['db'])
@@ -482,9 +492,24 @@ def run_benchmark(
                     print("*************STARTING HAMMERDB SEARCH*************")
                     
                     if i == 0 and build_schema:
+                        # Measure drop_tpcc_schema time
+                        start_drop = time.time()
                         drop_tpcc_schema(db_config)
+                        end_drop = time.time()
+                        print(f"[TIMING] drop_tpcc_schema() duration = {end_drop - start_drop:.2f} seconds")
+
+                        # Measure buildschema time
+                        start_build = time.time()
                         buildschema()
+                        end_build = time.time()
+                        print(f"[TIMING] buildschema() duration = {end_build - start_build:.2f} seconds")
+
+                        # Measure vudestroy time (optional)
+                        start_destroy = time.time()
                         vudestroy()
+                        end_destroy = time.time()
+                        print(f"[TIMING] vudestroy() duration = {end_destroy - start_destroy:.2f} seconds")
+
 
                     # Start buffer cache monitoring
                     monitoring_thread = None
@@ -505,14 +530,20 @@ def run_benchmark(
                         
                         if idx == 0:
                             # TODO: Remove 
-                            diset('tpcc', 'pg_rampup', "10")
+                            diset('tpcc', 'pg_rampup', "0")
                         else:
                             diset('tpcc', 'pg_rampup', hammerdb_config['pg_rampup'])
                         
                         get_stats(db_config)
                         f.flush()
                         print(f"Running HammerDB TPC-CV with {vu} VUs")
+                        print(f"Running HammerDB TPC-CV with {vu} VUs")
+                        
+                        start_hammerdb = time.time()
                         run_tpccv(vu, output_dir)
+                        end_hammerdb = time.time()
+                        print(f"[TIMING] run_tpccv({vu}) duration = {end_hammerdb - start_hammerdb:.2f} seconds")
+
 
                         print("Sleeping for 30 seconds")
 
@@ -556,9 +587,8 @@ def main():
     # Setup database once for all cases
     setup_database(config)
     
-    # Get monitoring configuration (default to disabled if not present)
-    monitoring_config = config.get('buffercache_monitoring', {'enabled': False, 'interval_seconds': 10})
-    print(f"Buffer cache monitoring: {'ENABLED' if monitoring_config.get('enabled') else 'DISABLED'}")
+    monitoring_config = config.get('monitoring', {}).get('cache', {'enabled': False, 'interval_seconds': 10})
+    print(f"Cache monitoring: {'ENABLED' if monitoring_config.get('enabled') else 'DISABLED'}")
     if monitoring_config.get('enabled'):
         print(f"Monitoring interval: {monitoring_config.get('interval_seconds')} seconds")
 
