@@ -112,13 +112,10 @@ def query_configurations(config):
 
 
 def get_stats(config):
-    start_ts = datetime.now()
-    print(f"[get_stats] START at {start_ts.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
-
     with open('queries.json', 'r') as file:
         queries = json.load(file)
     
-    conn = None
+    conn = None  
     try:
         conn = psycopg2.connect(
             dbname=config['db_name'],
@@ -127,37 +124,24 @@ def get_stats(config):
             host=config['host']
         )
         cur = conn.cursor()
-
         for item in queries:
             query = item['query']
             description = item['description']
-            print(f"\n[get_stats] Running query: {description}")
-
+            print(f"\nRunning query: {description}")
             try:
                 cur.execute(query)
                 rows = cur.fetchall()
                 headers = [desc[0] for desc in cur.description]
-
                 print(f"{' | '.join(headers)}")
                 for row in rows:
                     print(f"{' | '.join(map(str, row))}")
-
             except Exception as e:
-                print(f"[get_stats] Failed to run query '{description}': {e}")
-
+                print(f"Failed to run query: {e}")
     except Exception as e:
-        print(f"[get_stats] Failed to connect or execute queries: {e}")
-
+        print(f"Failed to connect or execute queries: {e}")
     finally:
-        if conn:
+        if conn:  # Close if connection was established
             conn.close()
-
-        end_ts = datetime.now()
-        duration = (end_ts - start_ts).total_seconds()
-
-        print(f"[get_stats] END at   {end_ts.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
-        print(f"[get_stats] DURATION = {duration:.2f} seconds")
-
 
 def get_query_by_description(description: str):
 
@@ -492,24 +476,9 @@ def run_benchmark(
                     print("*************STARTING HAMMERDB SEARCH*************")
                     
                     if i == 0 and build_schema:
-                        # Measure drop_tpcc_schema time
-                        start_drop = time.time()
                         drop_tpcc_schema(db_config)
-                        end_drop = time.time()
-                        print(f"[TIMING] drop_tpcc_schema() duration = {end_drop - start_drop:.2f} seconds")
-
-                        # Measure buildschema time
-                        start_build = time.time()
                         buildschema()
-                        end_build = time.time()
-                        print(f"[TIMING] buildschema() duration = {end_build - start_build:.2f} seconds")
-
-                        # Measure vudestroy time (optional)
-                        start_destroy = time.time()
                         vudestroy()
-                        end_destroy = time.time()
-                        print(f"[TIMING] vudestroy() duration = {end_destroy - start_destroy:.2f} seconds")
-
 
                     # Start buffer cache monitoring
                     monitoring_thread = None
@@ -530,20 +499,14 @@ def run_benchmark(
                         
                         if idx == 0:
                             # TODO: Remove 
-                            diset('tpcc', 'pg_rampup', "0")
+                            diset('tpcc', 'pg_rampup', "10")
                         else:
                             diset('tpcc', 'pg_rampup', hammerdb_config['pg_rampup'])
                         
                         get_stats(db_config)
                         f.flush()
                         print(f"Running HammerDB TPC-CV with {vu} VUs")
-                        print(f"Running HammerDB TPC-CV with {vu} VUs")
-                        
-                        start_hammerdb = time.time()
                         run_tpccv(vu, output_dir)
-                        end_hammerdb = time.time()
-                        print(f"[TIMING] run_tpccv({vu}) duration = {end_hammerdb - start_hammerdb:.2f} seconds")
-
 
                         print("Sleeping for 30 seconds")
 
