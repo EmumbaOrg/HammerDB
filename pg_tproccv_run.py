@@ -164,9 +164,9 @@ def get_query_by_description(description: str):
 
 def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int, stop_event: threading.Event):
     
-    # Continuously monitor pg_buffercache and write to a separate log file.
+    # Continuously monitor pg_buffercache and write to a CSV file
     
-    log_file_path = os.path.join(output_dir, "buffercache_monitoring.log")
+    csv_file_path = os.path.join(output_dir, "buffercache_monitoring.csv")
     
     # Load the query from queries.json (same query used by get_stats)
     buffercache_query = get_query_by_description("Buffer Usage from pg_buffercache")
@@ -184,17 +184,10 @@ def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int,
             host=db_config['host']
         )
         
-        with open(log_file_path, 'w') as log_file:
-            # Write header
-            log_file.write("=" * 80 + "\n")
-            log_file.write("PostgreSQL Buffer Cache Continuous Monitoring\n")
-            log_file.write("=" * 80 + "\n")
-            log_file.write(f"Monitoring Interval: {interval_seconds} seconds\n")
-            log_file.write(f"Database: {db_config['db_name']}\n")
-            log_file.write(f"Host: {db_config['host']}\n")
-            log_file.write(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            log_file.write("=" * 80 + "\n\n")
-            log_file.flush()
+        with open(csv_file_path, 'w') as csv_file:
+            # Write CSV header (column names only)
+            csv_file.write("timestamp,used,empty,total,percent\n")
+            csv_file.flush()
             
             while not stop_event.is_set():
                 try:
@@ -206,36 +199,26 @@ def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int,
                     result = cur.fetchone()
                     
                     if result:
-                        # Parse result based on query structure
-                        # Query returns: used, empty, total, percent
+                        # Parse result: used, empty, total, percent
                         used, empty, total, percent = result
-                        log_file.write(f"[{timestamp}] used={used} | empty={empty} | total={total} | percent={percent}%\n")
-                        log_file.flush()
+                        # Write CSV row (values only, comma-separated)
+                        csv_file.write(f"{timestamp},{used},{empty},{total},{percent}\n")
+                        csv_file.flush()
                     
                     cur.close()
                     
                 except Exception as e:
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                    log_file.write(f"[{timestamp}] ERROR: {str(e)}\n")
-                    log_file.flush()
+                    # Write error as CSV row
+                    csv_file.write(f"{timestamp},ERROR,ERROR,ERROR,ERROR\n")
+                    csv_file.flush()
                 
                 # Wait for the interval or until stop_event is set
                 stop_event.wait(timeout=interval_seconds)
             
-            # Write footer when monitoring stops
-            log_file.write("\n" + "=" * 80 + "\n")
-            log_file.write(f"Monitoring stopped at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            log_file.write("=" * 80 + "\n")
-            log_file.flush()
-            
     except Exception as e:
         error_msg = f"Failed to start buffer cache monitoring: {e}\n"
         print(error_msg)
-        try:
-            with open(log_file_path, 'a') as log_file:
-                log_file.write(error_msg)
-        except:
-            pass
     finally:
         if conn:
             conn.close()
