@@ -8,8 +8,8 @@ from psycopg2 import sql
 import os
 import shutil
 from hammerdb import * 
-import threading
 from datetime import datetime
+from multiprocessing import Process, Event
 
 os.environ["LOG_LEVEL"] = "DEBUG"
 
@@ -161,61 +161,77 @@ def get_query_by_description(description: str):
         print(f"Failed to load query from queries.json: {e}")
         return None
 
-def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int, stop_event: threading.Event):
+def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int, stop_event: Event):
+    
+    """
+    Continuously monitor PostgreSQL buffer cache (pg_buffercache) and write usage stats to a CSV file
+    at precise intervals. Designed to run in a separate process.
+    """
 
-    # Continuously monitor pg_buffercache and write to a CSV file.
+    # Helper function to get the current timestamp in precise format     
+    def now_ts():
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
     csv_file_path = os.path.join(output_dir, "cache_monitoring.csv")
-    
-    # Load query from queries.json
+
+    # Import the query function explicitly for process-safe access
+    from __main__ import get_query_by_description
     buffercache_query = get_query_by_description("Buffer Usage from pg_buffercache")
-    
     if buffercache_query is None:
         print("ERROR: Could not load buffer cache query from queries.json")
         return
-    
+
     try:
-        # Context managers ensure automatic cleanup of connection and file
-        # Resources are closed even if exceptions occur
         with psycopg2.connect(
             dbname=db_config['db_name'],
             user=db_config['username'],
             password=db_config['password'],
             host=db_config['host']
-        ) as conn, open(csv_file_path, 'w') as csv_file:
-            
-            # Write CSV header
-            csv_file.write("timestamp,used,empty,total,percent\n")
-            csv_file.flush()
-            
-            # Main monitoring loop
-            while not stop_event.is_set():
-                try:
-                    # Cursor context manager closes after each query
-                    with conn.cursor() as cur:
-                        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                        # Execute buffercache query from queries.json
-                        cur.execute(buffercache_query)
-                        result = cur.fetchone()
-                        
-                        if result:
-                            # Parse result: used, empty, total, percent
-                            used, empty, total, percent = result
-                            # Write CSV row (values only, comma-separated)
-                            csv_file.write(f"{timestamp},{used},{empty},{total},{percent}\n")
-                            csv_file.flush()
-                
-                except Exception as e:
-                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                    # Write error as CSV row
-                    csv_file.write(f"{timestamp},ERROR,ERROR,ERROR,ERROR\n")
+        ) as conn:
+            # Ensure each query is executed immediately without requiring a commit
+            conn.autocommit = True
+
+            # Open a cursor once and reuse it for all queries
+            with conn.cursor() as cur:
+                with open(csv_file_path, 'w') as csv_file:
+                    # Write CSV header
+                    csv_file.write("timestamp,used,empty,total,percent\n")
                     csv_file.flush()
-                
-                # Wait for the interval or until stop_event is set
-                stop_event.wait(timeout=interval_seconds)
-    
+
+                    # Track next scheduled run using monotonic time to avoid drift
+                    next_run = time.monotonic()
+
+                    # Main monitoring loop
+                    while not stop_event.is_set():
+                        ts = now_ts()   # current timestamp
+                        try:
+                            # Execute buffer cache query
+                            cur.execute(buffercache_query)
+                            result = cur.fetchone()
+                            if result:
+                                used, empty, total, percent = result
+                                # Write results to CSV
+                                csv_file.write(f"{ts},{used},{empty},{total},{percent}\n")
+                            else:
+                                csv_file.write(f"{ts},ERROR,ERROR,ERROR,ERROR\n")
+                        except Exception as e:
+                            csv_file.write(f"{ts},ERROR,ERROR,ERROR,ERROR\n")
+
+                        csv_file.flush()    # Ensure data is written immediately
+
+                        # Precise interval scheduling using monotonic time
+                        # Calculate next scheduled run
+                        next_run += interval_seconds
+                        while True:
+                            remaining = next_run - time.monotonic()
+                            # Exit loop if it's time for next run or stop requested
+                            if remaining <= 0 or stop_event.is_set():
+                                break
+                            # Sleep in short intervals (max 1 second) to check stop_event frequently
+                            time.sleep(min(1, remaining))
+
     except Exception as e:
-        print(f"Failed to start cache monitoring: {e}")
+        print(f"[CACHE_MONITOR] Failed: {e}")
 
 def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     dbset('db', hammerdb_config['db'])
@@ -481,18 +497,18 @@ def run_benchmark(
                         vudestroy()
 
                     # Start buffer cache monitoring
-                    monitoring_thread = None
-                    stop_monitoring = threading.Event()
-                    
+                    monitoring_process = None
+                    stop_monitoring = Event()
+
                     if monitoring_config.get('enabled', False):
                         interval = monitoring_config.get('interval_seconds', 10)
-                        monitoring_thread = threading.Thread(
+                        monitoring_process = Process(
                             target=monitor_buffercache,
                             args=(db_config, output_dir, interval, stop_monitoring),
                             daemon=True,
                             name=f"BufferCacheMonitor-{case['db-label']}"
                         )
-                        monitoring_thread.start()
+                        monitoring_process.start()
                         print(f"Started buffer cache monitoring (interval: {interval}s)")
 
                     for idx, vu in enumerate(case["num-concurrency"]):
@@ -519,23 +535,17 @@ def run_benchmark(
                     print("*************END*************")
 
                 # Stop buffer cache monitoring if it's running
-                if monitoring_thread is not None and monitoring_thread.is_alive():
+                if monitoring_process is not None and monitoring_process.is_alive():
                     print(f"Stopping buffer cache monitoring for {output_dir}")
                     stop_monitoring.set()
-                    monitoring_thread.join(timeout=5)
-                    if monitoring_thread.is_alive():
-                        print(f"Warning: Monitoring thread did not stop gracefully")
+                    monitoring_process.join(timeout=5)
+                    if monitoring_process.is_alive():
+                        print(f"Warning: Monitoring process did not stop gracefully")
                     else:
                         print(f"Buffer cache monitoring stopped successfully")
 
             except subprocess.CalledProcessError as e:
                 print(f"Benchmark failed: {e}")
-
-                # Stop monitoring on error as well
-                if monitoring_thread is not None and monitoring_thread.is_alive():
-                    print(f"Stopping buffer cache monitoring due to error")
-                    stop_monitoring.set()
-                    monitoring_thread.join(timeout=5)
 
             print("Sleeping for 1 minute")    
             time.sleep(60)
