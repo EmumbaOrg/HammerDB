@@ -44,6 +44,7 @@ def setup_database(config):
         cursor = conn.cursor()
         cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
         cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_diskann;")
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_buffercache;")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -163,10 +164,7 @@ def get_query_by_description(description: str):
 
 def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int, stop_event: Event):
     
-    """
-    Continuously monitor PostgreSQL buffer cache (pg_buffercache) and write usage stats to a CSV file
-    at precise intervals. Designed to run in a separate process.
-    """
+    # Continuously monitor PostgreSQL buffer cache and write usage stats to a CSV file at precise intervals
 
     # Helper function to get the current timestamp in precise format     
     def now_ts():
@@ -232,6 +230,192 @@ def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int,
 
     except Exception as e:
         print(f"[CACHE_MONITOR] Failed: {e}")
+
+def monitor_index_hits(db_config: dict, output_dir: str, interval_seconds: int, stop_event: Event):
+
+    # Monitor PostgreSQL index cache hits/misses and write stats to a CSV file at precise intervals
+    
+    # Helper function to get the current timestamp in precise format
+    def now_ts():
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    
+    csv_file_path = os.path.join(output_dir, "index_hits_monitoring.csv")
+    
+    # Import the query function explicitly for process-safe access
+    from __main__ import get_query_by_description
+    index_hits_query = get_query_by_description("Index Hit Ratio with Table and Index Names")
+    if index_hits_query is None:
+        print("ERROR: Could not load index hits query from queries.json")
+        return
+    
+    try:
+        with psycopg2.connect(
+            dbname=db_config['db_name'],
+            user=db_config['username'],
+            password=db_config['password'],
+            host=db_config['host']
+        ) as conn:
+            # Ensure each query is executed immediately without requiring a commit
+            conn.autocommit = True
+            
+            # Open a cursor once and reuse it for all queries
+            with conn.cursor() as cur:
+                with open(csv_file_path, 'w') as csv_file:
+                    # Write CSV header
+                    csv_file.write("timestamp,schema,table_name,index_name,index_hit_ratio\n")
+                    csv_file.flush()
+                    
+                    # Track next scheduled run using monotonic time to avoid drift
+                    next_run = time.monotonic()
+                    
+                    # Main monitoring loop
+                    while not stop_event.is_set():
+                        ts = now_ts()  # current timestamp
+                        try:
+                            # Execute index hits query
+                            cur.execute(index_hits_query)
+                            results = cur.fetchall()
+                            
+                            if results:
+                                # Query returns: schemaname, table_name, index_name, hit_ratio
+                                for row in results:
+                                    schema, table_name, index_name, hit_ratio = row
+                                    # Handle NULL hit_ratio (when index has no activity)
+                                    hit_ratio_str = str(hit_ratio) if hit_ratio is not None else "NULL"
+                                    csv_file.write(f"{ts},{schema},{table_name},{index_name},{hit_ratio_str}\n")
+                            else:
+                                # No indexes found or no activity
+                                csv_file.write(f"{ts},NO_DATA,NO_DATA,NO_DATA,NO_DATA\n")
+                        
+                        except Exception as e:
+                            csv_file.write(f"{ts},ERROR,ERROR,ERROR,ERROR\n")
+                        
+                        csv_file.flush()  # Ensure data is written immediately
+                        
+                        # Precise interval scheduling using monotonic time
+                        # Calculate next scheduled run
+                        next_run += interval_seconds
+                        while True:
+                            remaining = next_run - time.monotonic()
+                            # Exit loop if it's time for next run or stop requested
+                            if remaining <= 0 or stop_event.is_set():
+                                break
+                            # Sleep in short intervals (max 1 second) to check stop_event frequently
+                            time.sleep(min(1, remaining))
+    
+    except Exception as e:
+        print(f"[INDEX_HITS_MONITOR] Failed: {e}")
+
+def monitor_page_activity(db_config: dict, output_dir: str, interval_seconds: int, stop_event: Event):
+    """
+    Monitor page loads/removals by tracking buffer count changes per table/index.
+    Uses pg_buffercache to count buffers, then calculates deltas to detect:
+    - Positive delta = pages loaded into cache
+    - Negative delta = pages evicted from cache
+    """
+    
+    def now_ts():
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    
+    csv_file_path = os.path.join(output_dir, "page_activity_monitoring.csv")
+    
+    # Query to count buffers per relation
+    page_activity_query = """
+    SELECT 
+        n.nspname AS schema,
+        c.relname AS relation,
+        CASE c.relkind 
+            WHEN 'r' THEN 'table'
+            WHEN 'i' THEN 'index'
+            WHEN 't' THEN 'toast'
+            WHEN 'm' THEN 'matview'
+            ELSE 'other'
+        END AS relation_type,
+        count(*) AS buffer_count,
+        pg_size_pretty(count(*) * 8192) AS cache_size
+    FROM pg_buffercache b
+    JOIN pg_class c ON b.relfilenode = pg_relation_filenode(c.oid) 
+        AND b.reldatabase IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relname NOT LIKE 'pg_toast%'  -- Exclude toast tables for clarity
+    GROUP BY n.nspname, c.relname, c.relkind
+    HAVING count(*) > 0  -- Only relations currently in cache
+    ORDER BY count(*) DESC;
+    """
+    
+    prev_buffer_counts = {}  # Key: (schema, relation), Value: buffer_count
+    
+    try:
+        with psycopg2.connect(
+            dbname=db_config['db_name'],
+            user=db_config['username'],
+            password=db_config['password'],
+            host=db_config['host']
+        ) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                with open(csv_file_path, 'w') as csv_file:
+                    csv_file.write("timestamp,schema,relation,relation_type,buffer_count,buffer_delta,cache_size,activity\n")
+                    csv_file.flush()
+                    
+                    next_run = time.monotonic()
+                    while not stop_event.is_set():
+                        ts = now_ts()
+                        try:
+                            cur.execute(page_activity_query)
+                            results = cur.fetchall()
+                            
+                            current_buffer_counts = {}
+                            
+                            if results:
+                                for row in results:
+                                    schema, relation, rel_type, buffer_count, cache_size = row
+                                    
+                                    key = (schema, relation)
+                                    current_buffer_counts[key] = buffer_count
+                                    
+                                    # Calculate delta
+                                    prev_count = prev_buffer_counts.get(key, buffer_count)  # First snapshot: delta=0
+                                    buffer_delta = buffer_count - prev_count
+                                    
+                                    # Determine activity type
+                                    if buffer_delta > 0:
+                                        activity = "LOADED"
+                                    elif buffer_delta < 0:
+                                        activity = "EVICTED"
+                                    else:
+                                        activity = "STABLE"
+                                    
+                                    csv_file.write(f"{ts},{schema},{relation},{rel_type},{buffer_count},{buffer_delta},{cache_size},{activity}\n")
+                                
+                                # Check for evicted relations (in previous snapshot but not current)
+                                for key, prev_count in prev_buffer_counts.items():
+                                    if key not in current_buffer_counts:
+                                        schema, relation = key
+                                        buffer_delta = -prev_count  # Fully evicted
+                                        csv_file.write(f"{ts},{schema},{relation},unknown,0,{buffer_delta},0 bytes,FULLY_EVICTED\n")
+                                
+                                # Update previous counts
+                                prev_buffer_counts = current_buffer_counts
+                            else:
+                                csv_file.write(f"{ts},NO_DATA,NO_DATA,NO_DATA,0,0,0 bytes,NO_DATA\n")
+                            
+                        except Exception as e:
+                            print(f"[PAGE_ACTIVITY_MONITOR] Error: {e}")
+                            csv_file.write(f"{ts},ERROR,ERROR,ERROR,0,0,0 bytes,ERROR\n")
+                        
+                        csv_file.flush()
+                        
+                        # Precise interval scheduling
+                        next_run += interval_seconds
+                        while True:
+                            remaining = next_run - time.monotonic()
+                            if remaining <= 0 or stop_event.is_set():
+                                break
+                            time.sleep(min(1, remaining))
+    
+    except Exception as e:
+        print(f"[PAGE_ACTIVITY_MONITOR] Failed: {e}")
 
 def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     dbset('db', hammerdb_config['db'])
@@ -496,20 +680,47 @@ def run_benchmark(
                         buildschema()
                         vudestroy()
 
-                    # Start buffer cache monitoring
-                    monitoring_process = None
+                    # Start monitoring processes
+                    cache_monitoring_process = None
+                    index_monitoring_process = None
+                    page_activity_process = None
                     stop_monitoring = Event()
 
-                    if monitoring_config.get('enabled', False):
-                        interval = monitoring_config.get('interval_seconds', 10)
-                        monitoring_process = Process(
+                    # Start cache monitoring
+                    if monitoring_config.get('cache', {}).get('enabled', False):
+                        interval = monitoring_config.get('cache', {}).get('interval_seconds', 10)
+                        cache_monitoring_process = Process(
                             target=monitor_buffercache,
                             args=(db_config, output_dir, interval, stop_monitoring),
                             daemon=True,
-                            name=f"BufferCacheMonitor-{case['db-label']}"
+                            name=f"CacheMonitor-{case['db-label']}"
                         )
-                        monitoring_process.start()
-                        print(f"Started buffer cache monitoring (interval: {interval}s)")
+                        cache_monitoring_process.start()
+                        print(f"Started cache monitoring (interval: {interval}s)")
+
+                    # Start index hits monitoring
+                    if monitoring_config.get('index_hits', {}).get('enabled', False):
+                        interval = monitoring_config.get('index_hits', {}).get('interval_seconds', 10)
+                        index_monitoring_process = Process(
+                            target=monitor_index_hits,
+                            args=(db_config, output_dir, interval, stop_monitoring),
+                            daemon=True,
+                            name=f"IndexHitsMonitor-{case['db-label']}"
+                        )
+                        index_monitoring_process.start()
+                        print(f"Started index hits monitoring (interval: {interval}s)")
+
+                    # Start page activity monitoring
+                    if monitoring_config.get('page_activity', {}).get('enabled', False):
+                        interval = monitoring_config.get('page_activity', {}).get('interval_seconds', 15)
+                        page_activity_process = Process(
+                            target=monitor_page_activity,
+                            args=(db_config, output_dir, interval, stop_monitoring),
+                            daemon=True,
+                            name=f"PageActivityMonitor-{case['db-label']}"
+                        )
+                        page_activity_process.start()
+                        print(f"Started page activity monitoring (interval: {interval}s)")
 
                     for idx, vu in enumerate(case["num-concurrency"]):
                         
@@ -534,16 +745,37 @@ def run_benchmark(
                     # calculate_recall(output_dir)
                     print("*************END*************")
 
-                # Stop buffer cache monitoring if it's running
-                if monitoring_process is not None and monitoring_process.is_alive():
-                    print(f"Stopping buffer cache monitoring for {output_dir}")
-                    stop_monitoring.set()
-                    monitoring_process.join(timeout=5)
-                    if monitoring_process.is_alive():
-                        print(f"Warning: Monitoring process did not stop gracefully")
-                    else:
-                        print(f"Buffer cache monitoring stopped successfully")
+                # Stop all monitoring processes
+                stop_monitoring.set()
 
+                # Stop cache monitoring
+                if cache_monitoring_process is not None and cache_monitoring_process.is_alive():
+                    print(f"Stopping cache monitoring for {output_dir}")
+                    cache_monitoring_process.join(timeout=5)
+                    if cache_monitoring_process.is_alive():
+                        print(f"Warning: Cache monitoring did not stop gracefully")
+                    else:
+                        print(f"Cache monitoring stopped successfully")
+
+                # Stop index hits monitoring
+                if index_monitoring_process is not None and index_monitoring_process.is_alive():
+                    print(f"Stopping index hits monitoring for {output_dir}")
+                    index_monitoring_process.join(timeout=5)
+                    if index_monitoring_process.is_alive():
+                        print(f"Warning: Index hits monitoring did not stop gracefully")
+                    else:
+                        print(f"Index hits monitoring stopped successfully")
+
+                # Stop page activity monitoring
+                if page_activity_process is not None and page_activity_process.is_alive():
+                    print(f"Stopping page activity monitoring for {output_dir}")
+                    page_activity_process.join(timeout=5)
+                    if page_activity_process.is_alive():
+                        print(f"Warning: Page activity monitoring did not stop gracefully")
+                    else:
+                        print(f"Page activity monitoring stopped successfully")
+
+                        
             except subprocess.CalledProcessError as e:
                 print(f"Benchmark failed: {e}")
 
@@ -560,11 +792,31 @@ def main():
     # Setup database once for all cases
     setup_database(config)
     
-    monitoring_config = config.get('monitoring', {}).get('cache', {'enabled': False, 'interval_seconds': 10})
-    print(f"Cache monitoring: {'ENABLED' if monitoring_config.get('enabled') else 'DISABLED'}")
-    if monitoring_config.get('enabled'):
-        print(f"Monitoring interval: {monitoring_config.get('interval_seconds')} seconds")
+    # Get monitoring configuration
+    monitoring_config = config.get('monitoring', {})
 
+    # Display monitoring status
+    print(f"\n{'='*60}")
+    print("MONITORING CONFIGURATION")
+    print(f"{'='*60}")
+    
+    cache_config = monitoring_config.get('cache', {'enabled': False, 'interval_seconds': 10})
+    print(f"Buffer Cache Monitoring: {'ENABLED' if cache_config.get('enabled') else 'DISABLED'}")
+    if cache_config.get('enabled'):
+        print(f"  Interval: {cache_config.get('interval_seconds')} seconds")
+
+    index_config = monitoring_config.get('index_hits', {'enabled': False, 'interval_seconds': 10})
+    print(f"Index Hits Monitoring: {'ENABLED' if index_config.get('enabled') else 'DISABLED'}")
+    if index_config.get('enabled'):
+        print(f"  Interval: {index_config.get('interval_seconds')} seconds")
+
+    page_activity_config = monitoring_config.get('page_activity', {'enabled': False, 'interval_seconds': 15})
+    print(f"Page Activity Monitoring: {'ENABLED' if page_activity_config.get('enabled') else 'DISABLED'}")
+    if page_activity_config.get('enabled'):
+        print(f"  Interval: {page_activity_config.get('interval_seconds')} seconds")
+    
+    print(f"{'='*60}\n")
+        
     for i, case in enumerate(config['cases']):
         if i > 0:
             build_schema = False
