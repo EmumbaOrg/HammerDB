@@ -21,7 +21,8 @@ def setup_database(config):
             dbname='postgres',
             user=config['database']['username'],
             password=config['database']['password'],
-            host=config['database']['host']
+            host=config['database']['host'],
+            port="5432"
         )
         conn.autocommit = True
         cursor = conn.cursor()
@@ -36,7 +37,8 @@ def setup_database(config):
             dbname=config['database']['db_name'],
             user=config['database']['username'],
             password=config['database']['password'],
-            host=config['database']['host']
+            host=config['database']['host'],
+            port="5432"
         )
         cursor = conn.cursor()
         cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
@@ -71,7 +73,8 @@ def query_configurations(config):
             dbname=config['db_name'],
             user=config['username'],
             password=config['password'],
-            host=config['host']
+            host=config['host'],
+            port=config['port']
         )
         cursor = conn.cursor()
         results = []
@@ -115,7 +118,8 @@ def get_stats(config):
             dbname=config['db_name'],
             user=config['username'],
             password=config['password'],
-            host=config['host']
+            host=config['host'],
+            port=config['port']
         )
         cur = conn.cursor()
         for item in queries:
@@ -164,6 +168,7 @@ def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     giset("commandline", "keepalive_margin", hammerdb_config['keepalive_margin'])
     dvset("mixed_workload", "vector_table_name", case["vector_table_name"])
 
+
 def configure_vectordb(ef_search: str, index: str, case: dict):
     dvset(index, "ss_hnsw.ef_search", ef_search)
     dvset(index, "se_k", case["k"])
@@ -177,15 +182,17 @@ def configure_vectordb(ef_search: str, index: str, case: dict):
         dvset(index, "bq_quantized_fetch_limit", case["quantized-fetch-limit"])
         dvset(index, "bq_dim", case["dim"])
         dvset(index, "bq_reranking", case["reranking"])
-    dvset("mixed_workload", "mw_oltp_vu", case["mw_oltp_vu"])
-    dvset("mixed_workload", "mw_vector_vu", case["mw_vector_vu"])
+    # dvset("mixed_workload", "mw_oltp_vu", case["mw_oltp_vu"])
+    # dvset("mixed_workload", "mw_vector_vu", case["mw_vector_vu"])
+    dvset("mixed_workload", "mw_oltp_ratio", case["mw_oltp_ratio"])
 
 def drop_tpcc_schema(db_config: dict):
     conn = psycopg2.connect(
         dbname=db_config['db_name'],
         user=db_config['username'],
         password=db_config['password'],
-        host=db_config['host']
+        host=db_config['host'],
+        port=db_config["port"]
     )
     cursor = conn.cursor()
 
@@ -346,8 +353,13 @@ def run_benchmark(
                     print("*************STARTING HAMMERDB SEARCH*************")
                     if i == 0 and build_schema:
                         drop_tpcc_schema(db_config)
+                        # Set VUs to warehouse count for building (VUs must be <= warehouses)
+                        build_vus = min(int(hammerdb_config['pg_num_vu']), int(hammerdb_config['pg_count_ware']))
+                        diset('tpcc', 'pg_num_vu', str(build_vus))
                         buildschema()
                         vudestroy()
+                        # Restore original VU count for benchmark
+                        diset('tpcc', 'pg_num_vu', hammerdb_config['pg_num_vu'])
                     
                     for idx, vu in enumerate(case["num-concurrency"]):
                         if idx == 0 and idx == 1:

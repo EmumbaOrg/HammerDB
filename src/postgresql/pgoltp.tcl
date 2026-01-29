@@ -2877,8 +2877,9 @@ proc loadtimedpgtpcc { } {
     } else {
         error "Index configuration for $vindex not found in vectordbdict"
     }
-    set mw_oltp_vu [dict get $vectordbdict mixed_workload mw_oltp_vu]
-    set mw_vector_vu [dict get $vectordbdict mixed_workload mw_vector_vu]
+
+    # Read mixed_workload settings from vectordbdict
+    set mw_oltp_ratio [dict get $vectordbdict mixed_workload mw_oltp_ratio]
     set vector_table_name [dict get $vectordbdict mixed_workload vector_table_name]
 
     if {[dict exists $dbdict postgresql library ]} {
@@ -2889,10 +2890,12 @@ proc loadtimedpgtpcc { } {
     setlocaltpccvars $configpostgresql
     ed_edit_clear
     .ed_mainFrame.notebook select .ed_mainFrame.mainwin
+    
     set _ED(packagekeyname) "PostgreSQL TPROC-C Timed"
     if { !$pg_async_scale } {
         #REGULAR TIMED SCRIPT
         .ed_mainFrame.mainwin.textFrame.left.text fastinsert end "#!/usr/local/bin/tclsh8.6
+
 #EDITABLE OPTIONS##################################################
 set library $library ;# PostgreSQL Library
 set vindex $vindex ;# PostgreSQL Vector Index Alogrithm
@@ -2901,8 +2904,7 @@ set session_params {$session_params} ;# Vector DB Dictionary
 set index_params {$index_params} ;# Vector DB Dictionary
 set index_creation_with_options {$index_creation_with_options} ;# Vector DB Dictionary
 set bq_params {$bq_params} ;# Vector DB Dictionary
-set mw_oltp_vu $mw_oltp_vu ;# Mixed Workload VUs Ratio
-set mw_vector_vu $mw_vector_vu ;# Mixed Workload VUs Ratio
+set mw_oltp_ratio $mw_oltp_ratio ;# Mixed Workload OLTP Ratio (0.0 to 1.0)
 set vector_table_name $vector_table_name ;# Vector table name used in VDBBench
 set total_iterations $pg_total_iterations ;# Number of transactions before logging off
 set RAISEERROR \"$pg_raiseerror\" ;# Exit script on PostgreSQL (true or false)
@@ -2960,6 +2962,19 @@ proc CheckDBVersion { lda1 } {
         }
 
 set rema [ lassign [ findvuposition ] myposition totalvirtualusers ]
+
+# Calculate OLTP and Vector VU counts from ratio at runtime
+set total_workers [expr {$totalvirtualusers - 1}]
+set mw_oltp_vu [expr {int(round($total_workers * $mw_oltp_ratio))}]
+set mw_vector_vu [expr {$total_workers - $mw_oltp_vu}]
+
+puts "Mixed Workload Configuration:"
+puts "  Total Workers: $total_workers"
+puts "  OLTP Ratio: $mw_oltp_ratio"  
+puts "  OLTP VUs: $mw_oltp_vu"
+puts "  Vector VUs: $mw_vector_vu"
+
+
 if {$myposition == 1} {
         ######MONITOR THREAD######
         if { $mode eq "Local" || $mode eq "Primary" } {

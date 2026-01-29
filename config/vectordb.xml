@@ -80,8 +80,7 @@
         </index_creation_with_options>
     </pgdiskann>
     <mixed_workload>
-        <mw_vector_vu>1</mw_vector_vu>
-        <mw_oltp_vu>1</mw_oltp_vu>
+        <mw_oltp_ratio>0.8</mw_oltp_ratio>
         <vector_table_name>public.pg_vector_collection</vector_table_name>
     </mixed_workload>
 </vectordb>
