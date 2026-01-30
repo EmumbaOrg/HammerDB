@@ -251,6 +251,74 @@ def calculate_recall(output_dir: str):
     with open(file_path, "w") as fd:
         fd.write(jobid)
 
+def start_monitoring_processes(
+    monitoring_config: dict, 
+    db_config: dict, 
+    output_dir: str, 
+    case_label: str
+) -> tuple:
+    """Start all enabled monitoring processes."""
+    stop_event = Event()
+    
+    # Define monitoring configurations
+    monitor_configs = [
+        {
+            'name': 'cache',
+            'display_name': 'Buffer Cache',
+            'target': monitor_buffercache,
+            'default_interval': 10
+        },
+        {
+            'name': 'index_hits',
+            'display_name': 'Index Hits',
+            'target': monitor_index_hits,
+            'default_interval': 10
+        },
+        {
+            'name': 'page_activity',
+            'display_name': 'Page Activity',
+            'target': monitor_page_activity,
+            'default_interval': 15
+        }
+    ]
+    
+    # Start enabled monitors
+    processes = []
+    for config in monitor_configs:
+        monitor_settings = monitoring_config.get(config['name'], {})
+        if monitor_settings.get('enabled', False):
+            interval = monitor_settings.get('interval_seconds', config['default_interval'])
+            process = Process(
+                target=config['target'],
+                args=(db_config, output_dir, interval, stop_event),
+                daemon=True,
+                name=f"{config['display_name']}Monitor-{case_label}"
+            )
+            process.start()
+            processes.append({
+                'name': config['display_name'],
+                'process': process
+            })
+            print(f"Started {config['display_name']} monitoring (interval: {interval}s)")
+    
+    return processes, stop_event
+
+
+def stop_monitoring_processes(processes: list, stop_event: Event, output_dir: str) -> None:
+    """Stop all monitoring processes """
+    stop_event.set()
+    
+    for monitor in processes:
+        if monitor['process'].is_alive():
+            print(f"Stopping {monitor['name']} monitoring for {output_dir}")
+            monitor['process'].join(timeout=5)
+            
+            if monitor['process'].is_alive():
+                print(f"Warning: {monitor['name']} monitoring did not stop gracefully")
+            else:
+                print(f"{monitor['name']} monitoring stopped successfully")
+
+
 def copy_log_and_config(output_directories: list):
     for output_dir in output_directories:
         try:
@@ -411,46 +479,9 @@ def run_benchmark(
                         vudestroy()
 
                     # Start monitoring processes
-                    cache_monitoring_process = None
-                    index_monitoring_process = None
-                    page_activity_process = None
-                    stop_monitoring = Event()
-
-                    # Start cache monitoring
-                    if monitoring_config.get('cache', {}).get('enabled', False):
-                        interval = monitoring_config.get('cache', {}).get('interval_seconds', 10)
-                        cache_monitoring_process = Process(
-                            target=monitor_buffercache,
-                            args=(db_config, output_dir, interval, stop_monitoring),
-                            daemon=True,
-                            name=f"CacheMonitor-{case['db-label']}"
-                        )
-                        cache_monitoring_process.start()
-                        print(f"Started cache monitoring (interval: {interval}s)")
-
-                    # Start index hits monitoring
-                    if monitoring_config.get('index_hits', {}).get('enabled', False):
-                        interval = monitoring_config.get('index_hits', {}).get('interval_seconds', 10)
-                        index_monitoring_process = Process(
-                            target=monitor_index_hits,
-                            args=(db_config, output_dir, interval, stop_monitoring),
-                            daemon=True,
-                            name=f"IndexHitsMonitor-{case['db-label']}"
-                        )
-                        index_monitoring_process.start()
-                        print(f"Started index hits monitoring (interval: {interval}s)")
-
-                    # Start page activity monitoring
-                    if monitoring_config.get('page_activity', {}).get('enabled', False):
-                        interval = monitoring_config.get('page_activity', {}).get('interval_seconds', 15)
-                        page_activity_process = Process(
-                            target=monitor_page_activity,
-                            args=(db_config, output_dir, interval, stop_monitoring),
-                            daemon=True,
-                            name=f"PageActivityMonitor-{case['db-label']}"
-                        )
-                        page_activity_process.start()
-                        print(f"Started page activity monitoring (interval: {interval}s)")
+                    processes, stop_event = start_monitoring_processes(
+                        monitoring_config, db_config, output_dir, case['db-label']
+                    )
 
                     for idx, vu in enumerate(case["num-concurrency"]):
                         
@@ -476,35 +507,7 @@ def run_benchmark(
                     print("*************END*************")
 
                 # Stop all monitoring processes
-                stop_monitoring.set()
-
-                # Stop cache monitoring
-                if cache_monitoring_process is not None and cache_monitoring_process.is_alive():
-                    print(f"Stopping cache monitoring for {output_dir}")
-                    cache_monitoring_process.join(timeout=5)
-                    if cache_monitoring_process.is_alive():
-                        print(f"Warning: Cache monitoring did not stop gracefully")
-                    else:
-                        print(f"Cache monitoring stopped successfully")
-
-                # Stop index hits monitoring
-                if index_monitoring_process is not None and index_monitoring_process.is_alive():
-                    print(f"Stopping index hits monitoring for {output_dir}")
-                    index_monitoring_process.join(timeout=5)
-                    if index_monitoring_process.is_alive():
-                        print(f"Warning: Index hits monitoring did not stop gracefully")
-                    else:
-                        print(f"Index hits monitoring stopped successfully")
-
-                # Stop page activity monitoring
-                if page_activity_process is not None and page_activity_process.is_alive():
-                    print(f"Stopping page activity monitoring for {output_dir}")
-                    page_activity_process.join(timeout=5)
-                    if page_activity_process.is_alive():
-                        print(f"Warning: Page activity monitoring did not stop gracefully")
-                    else:
-                        print(f"Page activity monitoring stopped successfully")
-
+                stop_monitoring_processes(processes, stop_event, output_dir)
                         
             except subprocess.CalledProcessError as e:
                 print(f"Benchmark failed: {e}")

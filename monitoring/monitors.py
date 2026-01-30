@@ -9,7 +9,7 @@ from datetime import datetime
 from multiprocessing import Event
 
 
-def get_query_by_description(description: str):
+def get_query_by_description(description: str) -> str | None:
     """Load a specific query from queries.json by its description."""
     import json
     try:
@@ -94,12 +94,6 @@ def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int,
 def monitor_index_hits(db_config: dict, output_dir: str, interval_seconds: int, stop_event: Event):
     """
     Monitor PostgreSQL index cache hits/misses and write stats to a CSV file at precise intervals.
-    
-    Args:
-        db_config: Database connection configuration
-        output_dir: Directory to write CSV output file
-        interval_seconds: Seconds between monitoring snapshots
-        stop_event: Event to signal monitoring should stop
     """
     
     def now_ts():
@@ -165,12 +159,6 @@ def monitor_page_activity(db_config: dict, output_dir: str, interval_seconds: in
     Uses pg_buffercache to count buffers, then calculates deltas to detect:
     - Positive delta = pages loaded into cache
     - Negative delta = pages evicted from cache
-    
-    Args:
-        db_config: Database connection configuration
-        output_dir: Directory to write CSV output file
-        interval_seconds: Seconds between monitoring snapshots
-        stop_event: Event to signal monitoring should stop
     """
     
     def now_ts():
