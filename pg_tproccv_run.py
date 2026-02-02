@@ -11,6 +11,9 @@ from hammerdb import *
 from datetime import datetime
 from multiprocessing import Process, Event
 
+# Import monitoring functions from the monitoring module
+from monitoring import monitor_buffercache, monitor_index_hits, monitor_page_activity
+
 os.environ["LOG_LEVEL"] = "DEBUG"
 
 def load_config(json_file):
@@ -44,6 +47,7 @@ def setup_database(config):
         cursor = conn.cursor()
         cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
         cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_diskann;")
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_buffercache;")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -142,96 +146,6 @@ def get_stats(config):
     finally:
         if conn:  # Close if connection was established
             conn.close()
-
-def get_query_by_description(description: str):
-
-    # Load a specific query from queries.json by its description
-
-    try:
-        with open('queries.json', 'r') as file:
-            queries = json.load(file)
-        
-        for item in queries:
-            if item['description'] == description:
-                return item['query']
-        
-        print(f"Warning: Query with description '{description}' not found in queries.json")
-        return None
-    except Exception as e:
-        print(f"Failed to load query from queries.json: {e}")
-        return None
-
-def monitor_buffercache(db_config: dict, output_dir: str, interval_seconds: int, stop_event: Event):
-    
-    """
-    Continuously monitor PostgreSQL buffer cache (pg_buffercache) and write usage stats to a CSV file
-    at precise intervals. Designed to run in a separate process.
-    """
-
-    # Helper function to get the current timestamp in precise format     
-    def now_ts():
-        return datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-
-    csv_file_path = os.path.join(output_dir, "cache_monitoring.csv")
-
-    # Import the query function explicitly for process-safe access
-    from __main__ import get_query_by_description
-    buffercache_query = get_query_by_description("Buffer Usage from pg_buffercache")
-    if buffercache_query is None:
-        print("ERROR: Could not load buffer cache query from queries.json")
-        return
-
-    try:
-        with psycopg2.connect(
-            dbname=db_config['db_name'],
-            user=db_config['username'],
-            password=db_config['password'],
-            host=db_config['host']
-        ) as conn:
-            # Ensure each query is executed immediately without requiring a commit
-            conn.autocommit = True
-
-            # Open a cursor once and reuse it for all queries
-            with conn.cursor() as cur:
-                with open(csv_file_path, 'w') as csv_file:
-                    # Write CSV header
-                    csv_file.write("timestamp,used,empty,total,percent\n")
-                    csv_file.flush()
-
-                    # Track next scheduled run using monotonic time to avoid drift
-                    next_run = time.monotonic()
-
-                    # Main monitoring loop
-                    while not stop_event.is_set():
-                        ts = now_ts()   # current timestamp
-                        try:
-                            # Execute buffer cache query
-                            cur.execute(buffercache_query)
-                            result = cur.fetchone()
-                            if result:
-                                used, empty, total, percent = result
-                                # Write results to CSV
-                                csv_file.write(f"{ts},{used},{empty},{total},{percent}\n")
-                            else:
-                                csv_file.write(f"{ts},ERROR,ERROR,ERROR,ERROR\n")
-                        except Exception as e:
-                            csv_file.write(f"{ts},ERROR,ERROR,ERROR,ERROR\n")
-
-                        csv_file.flush()    # Ensure data is written immediately
-
-                        # Precise interval scheduling using monotonic time
-                        # Calculate next scheduled run
-                        next_run += interval_seconds
-                        while True:
-                            remaining = next_run - time.monotonic()
-                            # Exit loop if it's time for next run or stop requested
-                            if remaining <= 0 or stop_event.is_set():
-                                break
-                            # Sleep in short intervals (max 1 second) to check stop_event frequently
-                            time.sleep(min(1, remaining))
-
-    except Exception as e:
-        print(f"[CACHE_MONITOR] Failed: {e}")
 
 def configure_hammerdb(db_config: dict, hammerdb_config: dict, case: dict):
     dbset('db', hammerdb_config['db'])
@@ -336,6 +250,74 @@ def calculate_recall(output_dir: str):
     file_path = os.path.join(output_dir, "tpccv_results.log")
     with open(file_path, "w") as fd:
         fd.write(jobid)
+
+def start_monitoring_processes(
+    monitoring_config: dict, 
+    db_config: dict, 
+    output_dir: str, 
+    case_label: str
+) -> tuple:
+    """Start all enabled monitoring processes."""
+    stop_event = Event()
+    
+    # Define monitoring configurations
+    monitor_configs = [
+        {
+            'name': 'cache',
+            'display_name': 'Buffer Cache',
+            'target': monitor_buffercache,
+            'default_interval': 10
+        },
+        {
+            'name': 'index_hits',
+            'display_name': 'Index Hits',
+            'target': monitor_index_hits,
+            'default_interval': 10
+        },
+        {
+            'name': 'page_activity',
+            'display_name': 'Page Activity',
+            'target': monitor_page_activity,
+            'default_interval': 15
+        }
+    ]
+    
+    # Start enabled monitors
+    processes = []
+    for config in monitor_configs:
+        monitor_settings = monitoring_config.get(config['name'], {})
+        if monitor_settings.get('enabled', False):
+            interval = monitor_settings.get('interval_seconds', config['default_interval'])
+            process = Process(
+                target=config['target'],
+                args=(db_config, output_dir, interval, stop_event),
+                daemon=True,
+                name=f"{config['display_name']}Monitor-{case_label}"
+            )
+            process.start()
+            processes.append({
+                'name': config['display_name'],
+                'process': process
+            })
+            print(f"Started {config['display_name']} monitoring (interval: {interval}s)")
+    
+    return processes, stop_event
+
+
+def stop_monitoring_processes(processes: list, stop_event: Event, output_dir: str) -> None:
+    """Stop all monitoring processes """
+    stop_event.set()
+    
+    for monitor in processes:
+        if monitor['process'].is_alive():
+            print(f"Stopping {monitor['name']} monitoring for {output_dir}")
+            monitor['process'].join(timeout=5)
+            
+            if monitor['process'].is_alive():
+                print(f"Warning: {monitor['name']} monitoring did not stop gracefully")
+            else:
+                print(f"{monitor['name']} monitoring stopped successfully")
+
 
 def copy_log_and_config(output_directories: list):
     for output_dir in output_directories:
@@ -496,20 +478,10 @@ def run_benchmark(
                         buildschema()
                         vudestroy()
 
-                    # Start buffer cache monitoring
-                    monitoring_process = None
-                    stop_monitoring = Event()
-
-                    if monitoring_config.get('enabled', False):
-                        interval = monitoring_config.get('interval_seconds', 10)
-                        monitoring_process = Process(
-                            target=monitor_buffercache,
-                            args=(db_config, output_dir, interval, stop_monitoring),
-                            daemon=True,
-                            name=f"BufferCacheMonitor-{case['db-label']}"
-                        )
-                        monitoring_process.start()
-                        print(f"Started buffer cache monitoring (interval: {interval}s)")
+                    # Start monitoring processes
+                    processes, stop_event = start_monitoring_processes(
+                        monitoring_config, db_config, output_dir, case['db-label']
+                    )
 
                     for idx, vu in enumerate(case["num-concurrency"]):
                         
@@ -534,16 +506,9 @@ def run_benchmark(
                     # calculate_recall(output_dir)
                     print("*************END*************")
 
-                # Stop buffer cache monitoring if it's running
-                if monitoring_process is not None and monitoring_process.is_alive():
-                    print(f"Stopping buffer cache monitoring for {output_dir}")
-                    stop_monitoring.set()
-                    monitoring_process.join(timeout=5)
-                    if monitoring_process.is_alive():
-                        print(f"Warning: Monitoring process did not stop gracefully")
-                    else:
-                        print(f"Buffer cache monitoring stopped successfully")
-
+                # Stop all monitoring processes
+                stop_monitoring_processes(processes, stop_event, output_dir)
+                        
             except subprocess.CalledProcessError as e:
                 print(f"Benchmark failed: {e}")
 
@@ -560,11 +525,29 @@ def main():
     # Setup database once for all cases
     setup_database(config)
     
-    monitoring_config = config.get('monitoring', {}).get('cache', {'enabled': False, 'interval_seconds': 10})
-    print(f"Cache monitoring: {'ENABLED' if monitoring_config.get('enabled') else 'DISABLED'}")
-    if monitoring_config.get('enabled'):
-        print(f"Monitoring interval: {monitoring_config.get('interval_seconds')} seconds")
+    # Get monitoring configuration
+    monitoring_config = config.get('monitoring', {})
 
+    # Display monitoring status
+    print("MONITORING CONFIGURATION")
+    
+    cache_config = monitoring_config.get('cache', {'enabled': False, 'interval_seconds': 10})
+    print(f"Buffer Cache Monitoring: {'ENABLED' if cache_config.get('enabled') else 'DISABLED'}")
+    if cache_config.get('enabled'):
+        print(f"  Interval: {cache_config.get('interval_seconds')} seconds")
+
+    index_config = monitoring_config.get('index_hits', {'enabled': False, 'interval_seconds': 10})
+    print(f"Index Hits Monitoring: {'ENABLED' if index_config.get('enabled') else 'DISABLED'}")
+    if index_config.get('enabled'):
+        print(f"  Interval: {index_config.get('interval_seconds')} seconds")
+
+    page_activity_config = monitoring_config.get('page_activity', {'enabled': False, 'interval_seconds': 15})
+    print(f"Page Activity Monitoring: {'ENABLED' if page_activity_config.get('enabled') else 'DISABLED'}")
+    if page_activity_config.get('enabled'):
+        print(f"  Interval: {page_activity_config.get('interval_seconds')} seconds")
+    
+    print(f"{'='*60}\n")
+        
     for i, case in enumerate(config['cases']):
         if i > 0:
             build_schema = False
