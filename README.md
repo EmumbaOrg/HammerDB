@@ -123,7 +123,6 @@ Mixed workload benchmarks require [VectorDBBench](https://github.com/EmumbaOrg/V
 
 1. **Clone VectorDBBench** in the same parent directory as HammerDB:
 ```bash
-cd ~
 git clone https://github.com/EmumbaOrg/VectorDBBench.git
 cd VectorDBBench
 git checkout dev
