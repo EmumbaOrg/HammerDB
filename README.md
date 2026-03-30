@@ -115,7 +115,7 @@ You can find sample configuration files for each algorithm in the `sample-run-co
 ### Database Requirements
 - PostgreSQL with `pgvector` and/or `pg_diskann` extensions enabled
 
-## VectorDBBench Setup (Required for Mixed Workload)
+## VectorDBBench Setup 
 
 Mixed workload benchmarks require [VectorDBBench](https://github.com/EmumbaOrg/VectorDBBench.git) to create vector tables and indexes before HammerDB runs concurrent OLTP and vector search workloads.
 
