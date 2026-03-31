@@ -135,16 +135,7 @@ source .venv/bin/activate
 pip install -e '.[pgvector]'
 ```
 
-3. **Setup HammerDB environment** (install VectorDBBench CLI):
-```bash
-cd ~/HammerDB
-python3 -m venv .venv
-source .venv/bin/activate
-pip install "vectordb-bench[pgvector]"
-pip install psycopg2-binary
-```
-
-4. **Install PostgreSQL extensions**:
+3. **Install PostgreSQL extensions**:
 ```bash
 psql -U postgres -d <your_database> -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
