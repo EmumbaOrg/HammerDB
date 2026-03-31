@@ -1,4 +1,5 @@
 # Building HammerDB from Source
+> **Note**: The `dev` branch contains pre-built HammerDB binaries. You can run benchmarks directly without building from source.
 
 HammerDB provides pre-compiled packages, but you can build from source if you need custom builds or the latest commits. Building from source requires installing compilers, dependencies, and database client/server libraries. For full details, see the [HammerDB documentation](https://www.hammerdb.com/docs/ch01s13.html) and [build blog](https://www.hammerdb.com/blog/uncategorized/how-to-build-hammerdb-from-source/).
 
@@ -113,6 +114,33 @@ You can find sample configuration files for each algorithm in the `sample-run-co
 
 ### Database Requirements
 - PostgreSQL with `pgvector` and/or `pg_diskann` extensions enabled
+
+## VectorDBBench Setup 
+
+Mixed workload benchmarks require [VectorDBBench](https://github.com/EmumbaOrg/VectorDBBench.git) to create vector tables and indexes before HammerDB runs concurrent OLTP and vector search workloads.
+
+### Installation
+
+1. **Clone VectorDBBench** in the same parent directory as HammerDB:
+```bash
+git clone https://github.com/EmumbaOrg/VectorDBBench.git
+cd VectorDBBench
+git checkout dev
+```
+
+2. **Setup VectorDBBench**:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[pgvector]'
+```
+
+3. **Install PostgreSQL extensions**:
+```bash
+psql -U postgres -d <your_database> -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+For detailed VectorDBBench usage, refer to the [VectorDBBench repository](https://github.com/EmumbaOrg/VectorDBBench.git).
 
 ## Configuration
 The `config.json` file defines the benchmarking setup. Here is a breakdown of the structure:
